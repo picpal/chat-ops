@@ -1,0 +1,126 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://chatops.example.com/schemas/query-result.json",
+  "title": "QueryResult",
+  "description": "Core API가 AI Orchestrator에 반환하는 쿼리 실행 결과",
+  "type": "object",
+  "required": ["requestId", "status"],
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "description": "요청 ID (QueryPlan의 requestId와 동일)"
+    },
+    "status": {
+      "type": "string",
+      "description": "쿼리 실행 상태",
+      "enum": ["success", "error", "partial"]
+    },
+    "data": {
+      "type": "object",
+      "description": "쿼리 결과 데이터 (status=success 또는 partial일 때)",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "description": "조회된 데이터 행 목록",
+          "items": {
+            "type": "object",
+            "description": "각 행은 동적 필드를 가짐",
+            "additionalProperties": true
+          }
+        },
+        "aggregations": {
+          "type": "object",
+          "description": "집계 결과 (operation=aggregate일 때)",
+          "additionalProperties": true
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "쿼리 실행 메타데이터",
+      "properties": {
+        "executionTimeMs": {
+          "type": "integer",
+          "description": "쿼리 실행 시간 (밀리초)"
+        },
+        "rowsReturned": {
+          "type": "integer",
+          "description": "반환된 행 개수"
+        },
+        "totalRows": {
+          "type": "integer",
+          "description": "전체 행 개수 (COUNT 쿼리 실행 시)"
+        },
+        "dataSource": {
+          "type": "string",
+          "description": "데이터 소스 식별자",
+          "examples": ["postgresql", "redis", "elasticsearch"]
+        },
+        "executedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "쿼리 실행 시각 (ISO 8601)"
+        }
+      }
+    },
+    "pagination": {
+      "type": "object",
+      "description": "페이징 정보 (결과가 여러 페이지일 때)",
+      "properties": {
+        "queryToken": {
+          "type": "string",
+          "description": "다음 페이지 조회용 토큰"
+        },
+        "hasMore": {
+          "type": "boolean",
+          "description": "다음 페이지 존재 여부"
+        },
+        "currentPage": {
+          "type": "integer",
+          "description": "현재 페이지 번호 (1부터 시작)"
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "description": "에러 정보 (status=error일 때)",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "에러 코드",
+          "examples": ["VALIDATION_ERROR", "EXECUTION_ERROR", "PERMISSION_DENIED", "TIMEOUT"]
+        },
+        "message": {
+          "type": "string",
+          "description": "에러 메시지 (사용자 친화적)"
+        },
+        "details": {
+          "type": "string",
+          "description": "상세 에러 정보 (디버깅용)"
+        },
+        "field": {
+          "type": "string",
+          "description": "에러 발생 필드 (Validation error일 때)"
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "description": "경고 메시지 목록 (쿼리는 성공했지만 주의사항이 있을 때)",
+      "items": {
+        "type": "object",
+        "required": ["code", "message"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "examples": ["SLOW_QUERY", "LARGE_RESULT", "DEPRECATED_FIELD"]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

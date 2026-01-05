@@ -1,0 +1,262 @@
+import React, { useState, useMemo } from 'react'
+import { useModal } from '@/hooks'
+import { Icon, Badge } from '@/components/common'
+import { formatCurrency, formatDate, cn } from '@/utils'
+import { TableRenderSpec, TableColumn } from '@/types/renderSpec'
+
+const ROWS_PER_PAGE = 10
+
+const TableDetailModal: React.FC = () => {
+  const { isOpen, type, data, close } = useModal()
+  const [currentPage, setCurrentPage] = useState(1)
+
+  // Extract modal data
+  const modalData = data as {
+    spec: TableRenderSpec
+    rows: any[]
+  } | undefined
+
+  const spec = modalData?.spec
+  const rows = modalData?.rows || []
+
+  // Pagination
+  const totalPages = Math.ceil(rows.length / ROWS_PER_PAGE)
+  const paginatedRows = useMemo(() => {
+    const start = (currentPage - 1) * ROWS_PER_PAGE
+    return rows.slice(start, start + ROWS_PER_PAGE)
+  }, [rows, currentPage])
+
+  // Reset page when modal opens
+  React.useEffect(() => {
+    if (isOpen && type === 'tableDetail') {
+      setCurrentPage(1)
+    }
+  }, [isOpen, type])
+
+  // ESC key handler
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close()
+    }
+    if (isOpen && type === 'tableDetail') {
+      document.addEventListener('keydown', handleKeyDown)
+      document.body.style.overflow = 'hidden'
+    }
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      document.body.style.overflow = ''
+    }
+  }, [isOpen, type, close])
+
+  if (!isOpen || type !== 'tableDetail' || !spec) return null
+
+  // Format cell value
+  const formatCellValue = (value: any, column: TableColumn): React.ReactNode => {
+    if (value == null) return '-'
+
+    switch (column.type) {
+      case 'currency':
+        return formatCurrency(value)
+      case 'date':
+        return formatDate(value)
+      case 'status':
+        return <Badge status={String(value)}>{String(value)}</Badge>
+      case 'number':
+        return typeof value === 'number' ? value.toLocaleString() : value
+      default:
+        return String(value)
+    }
+  }
+
+  // Generate page numbers
+  const getPageNumbers = () => {
+    const pages: (number | string)[] = []
+    if (totalPages <= 7) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i)
+    } else {
+      if (currentPage <= 3) {
+        pages.push(1, 2, 3, '...', totalPages)
+      } else if (currentPage >= totalPages - 2) {
+        pages.push(1, '...', totalPages - 2, totalPages - 1, totalPages)
+      } else {
+        pages.push(1, '...', currentPage - 1, currentPage, currentPage + 1, '...', totalPages)
+      }
+    }
+    return pages
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity"
+        onClick={close}
+      />
+
+      {/* Modal */}
+      <div className="relative w-full h-full bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-fade-in-up border border-slate-200">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-white shrink-0 z-20">
+          <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+            <Icon name="aspect_ratio" className="text-primary" />
+            {spec.title || 'Maximized Data View'}
+          </h2>
+          <div className="flex items-center gap-3">
+            {/* Download Button */}
+            <div className="relative group">
+              <button className="p-2 text-slate-500 hover:text-primary hover:bg-slate-50 rounded-lg transition-colors border border-slate-200 shadow-sm flex items-center gap-2 bg-slate-50/50">
+                <Icon name="download" size="sm" />
+                <span className="text-sm font-medium hidden sm:block">Download</span>
+              </button>
+              {/* Dropdown (shown on hover) */}
+              <div className="absolute right-0 top-full mt-2 w-56 bg-white rounded-xl shadow-xl border border-slate-100 py-2 z-50 ring-1 ring-black/5 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all">
+                <div className="px-3 py-2 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                  Export Options
+                </div>
+                <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 hover:text-primary transition-colors">
+                  <Icon name="table_view" className="text-emerald-600" />
+                  Download as Excel
+                </button>
+                <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 hover:text-primary transition-colors">
+                  <Icon name="picture_as_pdf" className="text-red-500" />
+                  Download as PDF
+                </button>
+              </div>
+            </div>
+
+            <div className="h-6 w-px bg-slate-200" />
+
+            {/* Close Button */}
+            <button
+              onClick={close}
+              className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+            >
+              <Icon name="close" size="sm" />
+            </button>
+          </div>
+        </div>
+
+        {/* Table Content */}
+        <div className="flex-1 overflow-auto bg-slate-50/30 p-0 relative">
+          <table className="w-full text-left text-sm text-slate-600">
+            <thead className="bg-slate-50 text-xs uppercase font-bold text-slate-500 border-b border-slate-200 sticky top-0 z-10 shadow-sm">
+              <tr>
+                {spec.columns.map((col) => (
+                  <th
+                    key={col.key}
+                    className={cn(
+                      'px-8 py-4 whitespace-nowrap bg-slate-50',
+                      col.type === 'currency' || col.type === 'number' ? 'text-right' : '',
+                      col.type === 'status' ? 'text-center' : ''
+                    )}
+                  >
+                    {col.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {paginatedRows.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={spec.columns.length}
+                    className="px-8 py-12 text-center text-slate-500"
+                  >
+                    No data available
+                  </td>
+                </tr>
+              ) : (
+                paginatedRows.map((row, idx) => (
+                  <tr
+                    key={idx}
+                    className="hover:bg-blue-50/30 transition-colors group"
+                  >
+                    {spec.columns.map((col) => (
+                      <td
+                        key={col.key}
+                        className={cn(
+                          'px-8 py-4',
+                          col.type === 'currency' || col.type === 'number'
+                            ? 'text-slate-900 font-bold text-right'
+                            : '',
+                          col.type === 'status' ? 'text-center' : '',
+                          col.key.toLowerCase().includes('id') &&
+                            'font-mono text-slate-700 text-xs'
+                        )}
+                      >
+                        {formatCellValue(row[col.key], col)}
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Footer with Pagination */}
+        <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between shrink-0">
+          <p className="text-sm text-slate-500">
+            Showing{' '}
+            <span className="font-medium text-slate-900">
+              {(currentPage - 1) * ROWS_PER_PAGE + 1}
+            </span>{' '}
+            to{' '}
+            <span className="font-medium text-slate-900">
+              {Math.min(currentPage * ROWS_PER_PAGE, rows.length)}
+            </span>{' '}
+            of{' '}
+            <span className="font-medium text-slate-900">{rows.length}</span>{' '}
+            results
+          </p>
+
+          {totalPages > 1 && (
+            <nav className="flex items-center gap-1">
+              {/* Previous Button */}
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="p-2 rounded-lg border border-slate-200 bg-white text-slate-400 hover:text-slate-600 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Icon name="chevron_left" size="sm" />
+              </button>
+
+              {/* Page Numbers */}
+              {getPageNumbers().map((page, idx) =>
+                page === '...' ? (
+                  <span key={`ellipsis-${idx}`} className="px-2 text-slate-400">
+                    ...
+                  </span>
+                ) : (
+                  <button
+                    key={page}
+                    onClick={() => setCurrentPage(page as number)}
+                    className={cn(
+                      'px-3.5 py-2 rounded-lg text-sm font-medium transition-colors',
+                      currentPage === page
+                        ? 'bg-primary text-white'
+                        : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    )}
+                  >
+                    {page}
+                  </button>
+                )
+              )}
+
+              {/* Next Button */}
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="p-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Icon name="chevron_right" size="sm" />
+              </button>
+            </nav>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default TableDetailModal

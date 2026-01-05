@@ -1,8 +1,14 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppLayout } from '@/components/layout'
-import { NewAnalysisModal } from '@/components/modals'
+import {
+  NewAnalysisModal,
+  TableDetailModal,
+  ChartDetailModal,
+  LogDetailModal,
+} from '@/components/modals'
 import { ErrorBoundary } from '@/components/common'
-import { ChatInterface } from '@/components/chat'
+// import { ChatInterface } from '@/components/chat'
+import { MockDataDemo } from '@/components/demo' // 테스트용
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -19,11 +25,15 @@ function App() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <AppLayout>
-          <ChatInterface />
+          {/* <ChatInterface /> */}
+          <MockDataDemo /> {/* 테스트용 - 완료 후 ChatInterface로 교체 */}
         </AppLayout>
 
         {/* Modals */}
         <NewAnalysisModal />
+        <TableDetailModal />
+        <ChartDetailModal />
+        <LogDetailModal />
       </QueryClientProvider>
     </ErrorBoundary>
   )

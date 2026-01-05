@@ -1,0 +1,120 @@
+services:
+  # ============================================
+  # Nginx Reverse Proxy
+  # ============================================
+  nginx:
+    image: nginx:alpine
+    container_name: chatops-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      core-api:
+        condition: service_healthy
+      ai-orchestrator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # ============================================
+  # PostgreSQL + pgvector
+  # ============================================
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: chatops-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-chatops}
+      POSTGRES_USER: ${POSTGRES_USER:-chatops_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chatops_pass}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-chatops_user} -d ${POSTGRES_DB:-chatops}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    restart: unless-stopped
+
+  # ============================================
+  # Core API (Java/Spring Boot)
+  # ============================================
+  core-api:
+    build:
+      context: ../../services/core-api
+      dockerfile: Dockerfile
+    container_name: chatops-core-api
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB:-chatops}
+      - SPRING_DATASOURCE_USERNAME=${POSTGRES_USER:-chatops_user}
+      - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD:-chatops_pass}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/query/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+    restart: unless-stopped
+
+  # ============================================
+  # AI Orchestrator (Python/FastAPI)
+  # ============================================
+  ai-orchestrator:
+    build:
+      context: ../../services/ai-orchestrator
+      dockerfile: Dockerfile
+    container_name: chatops-ai-orchestrator
+    environment:
+      - CORE_API_URL=http://core-api:8080
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-chatops_user}:${POSTGRES_PASSWORD:-chatops_pass}@postgres:5432/${POSTGRES_DB:-chatops}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - RAG_ENABLED=${RAG_ENABLED:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      core-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

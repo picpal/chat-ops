@@ -1,0 +1,34 @@
+# Build artifacts
+services/ui/.vite/
+services/ui/dist/
+services/ui/node_modules/
+services/core-api/build/
+services/core-api/.gradle/
+services/core-api/bin/
+services/ai-orchestrator/__pycache__/
+services/ai-orchestrator/.pytest_cache/
+services/ai-orchestrator/.venv/
+
+# Environment
+.env
+.env.local
+*.env
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Claude
+.claude/
