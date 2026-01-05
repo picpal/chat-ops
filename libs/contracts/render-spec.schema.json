@@ -1,0 +1,322 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://chatops.example.com/schemas/render-spec.json",
+  "title": "RenderSpec",
+  "description": "AI Orchestrator가 UI에 전달하는 렌더링 명세",
+  "type": "object",
+  "required": ["type"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "description": "렌더링 타입",
+      "enum": ["table", "text", "chart", "log", "composite"]
+    },
+    "title": {
+      "type": "string",
+      "description": "렌더 컴포넌트 제목"
+    },
+    "description": {
+      "type": "string",
+      "description": "렌더 컴포넌트 설명"
+    },
+    "table": {
+      "type": "object",
+      "description": "테이블 렌더링 설정 (type=table일 때)",
+      "properties": {
+        "columns": {
+          "type": "array",
+          "description": "테이블 컬럼 정의",
+          "items": {
+            "type": "object",
+            "required": ["key", "label"],
+            "properties": {
+              "key": {
+                "type": "string",
+                "description": "데이터 필드 키"
+              },
+              "label": {
+                "type": "string",
+                "description": "컬럼 헤더 레이블"
+              },
+              "type": {
+                "type": "string",
+                "description": "데이터 타입",
+                "enum": ["string", "number", "date", "boolean", "currency", "percentage"]
+              },
+              "format": {
+                "type": "string",
+                "description": "표시 포맷",
+                "examples": ["YYYY-MM-DD", "0,0.00", "currency:KRW"]
+              },
+              "align": {
+                "type": "string",
+                "description": "텍스트 정렬",
+                "enum": ["left", "center", "right"]
+              },
+              "sortable": {
+                "type": "boolean",
+                "description": "정렬 가능 여부"
+              },
+              "width": {
+                "type": "string",
+                "description": "컬럼 너비",
+                "examples": ["100px", "20%", "auto"]
+              }
+            }
+          }
+        },
+        "dataRef": {
+          "type": "string",
+          "description": "데이터 참조 경로 (QueryResult 내 경로)",
+          "default": "data.rows"
+        },
+        "actions": {
+          "type": "array",
+          "description": "행 액션 버튼 목록",
+          "items": {
+            "type": "object",
+            "required": ["label", "action"],
+            "properties": {
+              "label": {
+                "type": "string",
+                "description": "버튼 레이블"
+              },
+              "action": {
+                "type": "string",
+                "description": "액션 타입",
+                "enum": ["export-csv", "fullscreen", "refresh", "custom"]
+              },
+              "icon": {
+                "type": "string",
+                "description": "아이콘 이름"
+              }
+            }
+          }
+        },
+        "pagination": {
+          "type": "object",
+          "description": "페이지네이션 설정",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "페이지네이션 사용 여부"
+            },
+            "type": {
+              "type": "string",
+              "description": "페이지네이션 타입",
+              "enum": ["load-more", "infinite-scroll", "page-numbers"]
+            },
+            "pageSize": {
+              "type": "integer",
+              "description": "페이지당 행 개수"
+            }
+          }
+        }
+      }
+    },
+    "text": {
+      "type": "object",
+      "description": "텍스트 렌더링 설정 (type=text일 때)",
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "텍스트 내용 (Markdown 지원)"
+        },
+        "format": {
+          "type": "string",
+          "description": "텍스트 포맷",
+          "enum": ["markdown", "plain", "html"]
+        },
+        "sections": {
+          "type": "array",
+          "description": "섹션별 텍스트 (여러 블록으로 나눌 때)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["info", "warning", "error", "success"]
+              },
+              "title": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "chart": {
+      "type": "object",
+      "description": "차트 렌더링 설정 (type=chart일 때)",
+      "properties": {
+        "chartType": {
+          "type": "string",
+          "description": "차트 종류",
+          "enum": ["bar", "line", "pie", "area", "scatter", "composed"]
+        },
+        "dataRef": {
+          "type": "string",
+          "description": "데이터 참조 경로",
+          "default": "data.rows"
+        },
+        "xAxis": {
+          "type": "object",
+          "description": "X축 설정",
+          "properties": {
+            "dataKey": {
+              "type": "string",
+              "description": "X축 데이터 필드"
+            },
+            "label": {
+              "type": "string",
+              "description": "X축 레이블"
+            },
+            "type": {
+              "type": "string",
+              "enum": ["category", "number", "time"]
+            }
+          }
+        },
+        "yAxis": {
+          "type": "object",
+          "description": "Y축 설정",
+          "properties": {
+            "dataKey": {
+              "type": "string",
+              "description": "Y축 데이터 필드"
+            },
+            "label": {
+              "type": "string",
+              "description": "Y축 레이블"
+            },
+            "type": {
+              "type": "string",
+              "enum": ["number"]
+            }
+          }
+        },
+        "series": {
+          "type": "array",
+          "description": "데이터 시리즈 (여러 그래프 표시 시)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "dataKey": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "color": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": ["bar", "line", "area"]
+              }
+            }
+          }
+        },
+        "legend": {
+          "type": "boolean",
+          "description": "범례 표시 여부"
+        },
+        "tooltip": {
+          "type": "boolean",
+          "description": "툴팁 표시 여부"
+        }
+      }
+    },
+    "log": {
+      "type": "object",
+      "description": "로그 렌더링 설정 (type=log일 때)",
+      "properties": {
+        "dataRef": {
+          "type": "string",
+          "description": "로그 데이터 참조 경로",
+          "default": "data.rows"
+        },
+        "timestampKey": {
+          "type": "string",
+          "description": "타임스탬프 필드 키",
+          "default": "timestamp"
+        },
+        "levelKey": {
+          "type": "string",
+          "description": "로그 레벨 필드 키",
+          "default": "level"
+        },
+        "messageKey": {
+          "type": "string",
+          "description": "로그 메시지 필드 키",
+          "default": "message"
+        },
+        "highlight": {
+          "type": "array",
+          "description": "하이라이트할 키워드 목록",
+          "items": {
+            "type": "string"
+          }
+        },
+        "filter": {
+          "type": "object",
+          "description": "로그 필터 설정",
+          "properties": {
+            "levels": {
+              "type": "array",
+              "description": "표시할 로그 레벨",
+              "items": {
+                "type": "string",
+                "enum": ["DEBUG", "INFO", "WARN", "ERROR", "FATAL"]
+              }
+            },
+            "searchable": {
+              "type": "boolean",
+              "description": "검색 기능 활성화"
+            }
+          }
+        }
+      }
+    },
+    "composite": {
+      "type": "object",
+      "description": "복합 렌더링 설정 (여러 컴포넌트 조합, type=composite일 때)",
+      "properties": {
+        "layout": {
+          "type": "string",
+          "description": "레이아웃 방식",
+          "enum": ["vertical", "horizontal", "grid"]
+        },
+        "components": {
+          "type": "array",
+          "description": "하위 컴포넌트 목록 (재귀적 RenderSpec)",
+          "items": {
+            "$ref": "#"
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "렌더링 메타데이터",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "description": "원본 요청 ID"
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RenderSpec 생성 시각"
+        },
+        "version": {
+          "type": "string",
+          "description": "RenderSpec 버전"
+        }
+      }
+    }
+  }
+}

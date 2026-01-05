@@ -1,0 +1,130 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://chatops.example.com/schemas/query-plan.json",
+  "title": "QueryPlan",
+  "description": "AI Orchestrator가 Core API에 전달하는 쿼리 계획",
+  "type": "object",
+  "required": ["requestId", "entity", "operation"],
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "description": "요청 고유 ID",
+      "minLength": 1
+    },
+    "entity": {
+      "type": "string",
+      "description": "논리 엔티티명 (물리 테이블명 아님)",
+      "enum": ["Order", "Customer", "Product", "Inventory", "PaymentLog"]
+    },
+    "operation": {
+      "type": "string",
+      "description": "쿼리 작업 유형",
+      "enum": ["list", "aggregate", "search"]
+    },
+    "filters": {
+      "type": "array",
+      "description": "필터 조건 목록",
+      "items": {
+        "type": "object",
+        "required": ["field", "operator", "value"],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "논리 필드명"
+          },
+          "operator": {
+            "type": "string",
+            "description": "비교 연산자",
+            "enum": ["eq", "ne", "gt", "gte", "lt", "lte", "in", "like", "between"]
+          },
+          "value": {
+            "description": "비교 값 (타입은 필드에 따라 다름)",
+            "oneOf": [
+              { "type": "string" },
+              { "type": "number" },
+              { "type": "boolean" },
+              { "type": "array" }
+            ]
+          }
+        }
+      }
+    },
+    "aggregations": {
+      "type": "array",
+      "description": "집계 조건 목록",
+      "items": {
+        "type": "object",
+        "required": ["function", "field"],
+        "properties": {
+          "function": {
+            "type": "string",
+            "description": "집계 함수",
+            "enum": ["count", "sum", "avg", "min", "max"]
+          },
+          "field": {
+            "type": "string",
+            "description": "집계 대상 필드"
+          },
+          "alias": {
+            "type": "string",
+            "description": "집계 결과 별칭"
+          }
+        }
+      }
+    },
+    "groupBy": {
+      "type": "array",
+      "description": "그룹화 필드 목록",
+      "items": {
+        "type": "string"
+      }
+    },
+    "orderBy": {
+      "type": "array",
+      "description": "정렬 조건 목록",
+      "items": {
+        "type": "object",
+        "required": ["field", "direction"],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "정렬 필드명"
+          },
+          "direction": {
+            "type": "string",
+            "description": "정렬 방향",
+            "enum": ["asc", "desc"]
+          }
+        }
+      }
+    },
+    "limit": {
+      "type": "integer",
+      "description": "최대 조회 개수",
+      "minimum": 1,
+      "maximum": 1000,
+      "default": 10
+    },
+    "queryToken": {
+      "type": "string",
+      "description": "서버사이드 페이징 토큰 (다음 페이지 조회 시 사용)"
+    },
+    "timeRange": {
+      "type": "object",
+      "description": "시계열 데이터 조회 시 필수 시간 범위",
+      "required": ["start", "end"],
+      "properties": {
+        "start": {
+          "type": "string",
+          "format": "date-time",
+          "description": "시작 시간 (ISO 8601)"
+        },
+        "end": {
+          "type": "string",
+          "format": "date-time",
+          "description": "종료 시간 (ISO 8601)"
+        }
+      }
+    }
+  }
+}
