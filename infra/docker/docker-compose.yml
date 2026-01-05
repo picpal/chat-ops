@@ -116,5 +116,31 @@ services:
           memory: 256M
     restart: unless-stopped
 
+  # ============================================
+  # UI (React/Vite)
+  # ============================================
+  ui:
+    build:
+      context: ../../services/ui
+      dockerfile: Dockerfile
+    container_name: chatops-ui
+    ports:
+      - "3000:3000"
+    depends_on:
+      ai-orchestrator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
+    restart: unless-stopped
+
 volumes:
   postgres_data:
