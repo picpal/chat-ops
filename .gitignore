@@ -31,4 +31,5 @@ Thumbs.db
 logs/
 
 # Claude
-.claude/
+.claude/*
+!.claude/agents/
