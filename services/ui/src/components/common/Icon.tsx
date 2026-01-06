@@ -19,7 +19,7 @@ const Icon: React.FC<IconProps> = ({ name, className, size = 'md', onClick }) =>
     <span
       className={cn('material-symbols-outlined', sizeClasses[size], className)}
       onClick={onClick}
-      style={{ cursor: onClick ? 'pointer' : 'default' }}
+      style={onClick ? { cursor: 'pointer', pointerEvents: 'auto' } : undefined}
     >
       {name}
     </span>

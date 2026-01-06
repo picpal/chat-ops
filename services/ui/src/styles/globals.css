@@ -21,6 +21,12 @@
   background: #94a3b8;
 }
 
+/* Material Symbols icon fix */
+.material-symbols-outlined {
+  pointer-events: none;
+  user-select: none;
+}
+
 /* Base styles */
 * {
   margin: 0;
