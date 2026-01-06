@@ -14,7 +14,12 @@
     "entity": {
       "type": "string",
       "description": "논리 엔티티명 (물리 테이블명 아님)",
-      "enum": ["Order", "Customer", "Product", "Inventory", "PaymentLog"]
+      "enum": [
+        "Order", "Customer", "Product", "Inventory", "PaymentLog",
+        "Merchant", "PgCustomer", "PaymentMethod", "Payment",
+        "PaymentHistory", "Refund", "BalanceTransaction",
+        "Settlement", "SettlementDetail"
+      ]
     },
     "operation": {
       "type": "string",

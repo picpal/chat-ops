@@ -95,3 +95,201 @@ chatops:
         errorCode: error_code
       default-order-by: timestamp DESC
       time-range-required: true
+
+    # PG 결제 도메인 엔티티 매핑
+    Merchant:
+      table: merchants
+      fields:
+        merchantId: merchant_id
+        businessName: business_name
+        businessNumber: business_number
+        representativeName: representative_name
+        businessType: business_type
+        businessCategory: business_category
+        email: email
+        phone: phone
+        address: address
+        postalCode: postal_code
+        settlementBankCode: settlement_bank_code
+        settlementAccountNumber: settlement_account_number
+        settlementAccountHolder: settlement_account_holder
+        settlementCycle: settlement_cycle
+        feeRate: fee_rate
+        status: status
+        verifiedAt: verified_at
+        createdAt: created_at
+        updatedAt: updated_at
+      default-order-by: created_at DESC
+
+    PgCustomer:
+      table: pg_customers
+      fields:
+        customerId: customer_id
+        merchantId: merchant_id
+        email: email
+        name: name
+        phone: phone
+        shippingName: shipping_name
+        shippingPhone: shipping_phone
+        shippingAddress: shipping_address
+        shippingPostalCode: shipping_postal_code
+        defaultPaymentMethodId: default_payment_method_id
+        createdAt: created_at
+        updatedAt: updated_at
+      default-order-by: created_at DESC
+
+    PaymentMethod:
+      table: payment_methods
+      fields:
+        paymentMethodId: payment_method_id
+        customerId: customer_id
+        type: type
+        cardCompany: card_company
+        cardNumberMasked: card_number_masked
+        cardType: card_type
+        cardOwnerType: card_owner_type
+        cardExpMonth: card_exp_month
+        cardExpYear: card_exp_year
+        easyPayProvider: easy_pay_provider
+        isDefault: is_default
+        status: status
+        createdAt: created_at
+        updatedAt: updated_at
+      default-order-by: created_at DESC
+
+    Payment:
+      table: payments
+      fields:
+        paymentKey: payment_key
+        orderId: order_id
+        merchantId: merchant_id
+        customerId: customer_id
+        paymentMethodId: payment_method_id
+        orderName: order_name
+        amount: amount
+        currency: currency
+        method: method
+        balanceAmount: balance_amount
+        suppliedAmount: supplied_amount
+        vat: vat
+        taxFreeAmount: tax_free_amount
+        status: status
+        approvedAt: approved_at
+        cardApprovalNumber: card_approval_number
+        cardInstallmentMonths: card_installment_months
+        cardIsInterestFree: card_is_interest_free
+        virtualAccountBankCode: virtual_account_bank_code
+        virtualAccountNumber: virtual_account_number
+        virtualAccountHolder: virtual_account_holder
+        virtualAccountDueDate: virtual_account_due_date
+        canceledAt: canceled_at
+        canceledAmount: canceled_amount
+        cancelReason: cancel_reason
+        failureCode: failure_code
+        failureMessage: failure_message
+        isSettled: is_settled
+        settlementId: settlement_id
+        createdAt: created_at
+        updatedAt: updated_at
+      default-order-by: created_at DESC
+      time-range-required: true
+
+    PaymentHistory:
+      table: payment_history
+      fields:
+        historyId: history_id
+        paymentKey: payment_key
+        previousStatus: previous_status
+        newStatus: new_status
+        amountChange: amount_change
+        balanceAfter: balance_after
+        reason: reason
+        reasonCode: reason_code
+        processedBy: processed_by
+        processorId: processor_id
+        createdAt: created_at
+      default-order-by: created_at DESC
+      time-range-required: true
+
+    Refund:
+      table: refunds
+      fields:
+        refundKey: refund_key
+        paymentKey: payment_key
+        amount: amount
+        taxFreeAmount: tax_free_amount
+        reason: reason
+        cancelReasonCode: cancel_reason_code
+        status: status
+        approvedAt: approved_at
+        failureCode: failure_code
+        failureMessage: failure_message
+        refundBankCode: refund_bank_code
+        refundAccountNumber: refund_account_number
+        refundAccountHolder: refund_account_holder
+        requestedBy: requested_by
+        requesterId: requester_id
+        createdAt: created_at
+        updatedAt: updated_at
+      default-order-by: created_at DESC
+
+    BalanceTransaction:
+      table: balance_transactions
+      fields:
+        transactionId: transaction_id
+        merchantId: merchant_id
+        sourceType: source_type
+        sourceId: source_id
+        amount: amount
+        fee: fee
+        net: net
+        currency: currency
+        balanceBefore: balance_before
+        balanceAfter: balance_after
+        status: status
+        availableOn: available_on
+        description: description
+        createdAt: created_at
+      default-order-by: created_at DESC
+      time-range-required: true
+
+    Settlement:
+      table: settlements
+      fields:
+        settlementId: settlement_id
+        merchantId: merchant_id
+        settlementDate: settlement_date
+        periodStart: period_start
+        periodEnd: period_end
+        totalPaymentAmount: total_payment_amount
+        totalRefundAmount: total_refund_amount
+        totalFee: total_fee
+        netAmount: net_amount
+        paymentCount: payment_count
+        refundCount: refund_count
+        status: status
+        payoutBankCode: payout_bank_code
+        payoutAccountNumber: payout_account_number
+        payoutAccountHolder: payout_account_holder
+        payoutReference: payout_reference
+        processedAt: processed_at
+        paidOutAt: paid_out_at
+        createdAt: created_at
+        updatedAt: updated_at
+      default-order-by: settlement_date DESC
+
+    SettlementDetail:
+      table: settlement_details
+      fields:
+        detailId: detail_id
+        settlementId: settlement_id
+        transactionType: transaction_type
+        paymentKey: payment_key
+        refundKey: refund_key
+        amount: amount
+        fee: fee
+        netAmount: net_amount
+        method: method
+        transactionAt: transaction_at
+        createdAt: created_at
+      default-order-by: transaction_at DESC
