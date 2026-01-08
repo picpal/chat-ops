@@ -12,6 +12,9 @@ logger = logging.getLogger(__name__)
 
 # 엔티티별 컬럼 정의
 ENTITY_COLUMNS = {
+    # ============================================
+    # 기존 e-commerce 엔티티
+    # ============================================
     "Order": [
         {"key": "orderId", "label": "주문 ID", "type": "number", "align": "center"},
         {"key": "customerId", "label": "고객 ID", "type": "number", "align": "center"},
@@ -44,6 +47,99 @@ ENTITY_COLUMNS = {
         {"key": "orderId", "label": "주문 ID", "type": "number", "align": "center"},
         {"key": "message", "label": "메시지", "type": "string"},
         {"key": "errorCode", "label": "에러코드", "type": "string", "align": "center"}
+    ],
+    # ============================================
+    # PG 결제 도메인 엔티티
+    # ============================================
+    "Payment": [
+        {"key": "paymentKey", "label": "결제키", "type": "string", "width": "120px"},
+        {"key": "orderId", "label": "주문번호", "type": "string"},
+        {"key": "merchantId", "label": "가맹점ID", "type": "string"},
+        {"key": "orderName", "label": "주문명", "type": "string"},
+        {"key": "amount", "label": "결제금액", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "method", "label": "결제수단", "type": "string", "align": "center"},
+        {"key": "status", "label": "상태", "type": "string", "align": "center"},
+        {"key": "approvedAt", "label": "승인시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"},
+        {"key": "createdAt", "label": "생성시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"}
+    ],
+    "Merchant": [
+        {"key": "merchantId", "label": "가맹점ID", "type": "string"},
+        {"key": "businessName", "label": "사업체명", "type": "string"},
+        {"key": "businessNumber", "label": "사업자번호", "type": "string"},
+        {"key": "representativeName", "label": "대표자", "type": "string"},
+        {"key": "status", "label": "상태", "type": "string", "align": "center"},
+        {"key": "feeRate", "label": "수수료율", "type": "percentage", "format": "0.00%", "align": "right"},
+        {"key": "settlementCycle", "label": "정산주기", "type": "string", "align": "center"},
+        {"key": "createdAt", "label": "등록일", "type": "date", "format": "YYYY-MM-DD"}
+    ],
+    "PgCustomer": [
+        {"key": "customerId", "label": "고객ID", "type": "string"},
+        {"key": "merchantId", "label": "가맹점ID", "type": "string"},
+        {"key": "name", "label": "고객명", "type": "string"},
+        {"key": "email", "label": "이메일", "type": "string"},
+        {"key": "phone", "label": "전화번호", "type": "string"},
+        {"key": "createdAt", "label": "등록일", "type": "date", "format": "YYYY-MM-DD"}
+    ],
+    "PaymentMethod": [
+        {"key": "paymentMethodId", "label": "결제수단ID", "type": "string"},
+        {"key": "customerId", "label": "고객ID", "type": "string"},
+        {"key": "type", "label": "유형", "type": "string", "align": "center"},
+        {"key": "cardCompany", "label": "카드사", "type": "string"},
+        {"key": "cardNumberMasked", "label": "카드번호", "type": "string"},
+        {"key": "status", "label": "상태", "type": "string", "align": "center"},
+        {"key": "isDefault", "label": "기본", "type": "boolean", "align": "center"},
+        {"key": "createdAt", "label": "등록일", "type": "date", "format": "YYYY-MM-DD"}
+    ],
+    "PaymentHistory": [
+        {"key": "historyId", "label": "이력ID", "type": "number", "align": "center"},
+        {"key": "paymentKey", "label": "결제키", "type": "string"},
+        {"key": "previousStatus", "label": "이전상태", "type": "string", "align": "center"},
+        {"key": "newStatus", "label": "변경상태", "type": "string", "align": "center"},
+        {"key": "reason", "label": "사유", "type": "string"},
+        {"key": "processedBy", "label": "처리자", "type": "string"},
+        {"key": "createdAt", "label": "변경시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"}
+    ],
+    "Refund": [
+        {"key": "refundKey", "label": "환불키", "type": "string"},
+        {"key": "paymentKey", "label": "원결제키", "type": "string"},
+        {"key": "amount", "label": "환불금액", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "reason", "label": "환불사유", "type": "string"},
+        {"key": "status", "label": "상태", "type": "string", "align": "center"},
+        {"key": "approvedAt", "label": "승인시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"},
+        {"key": "createdAt", "label": "요청시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"}
+    ],
+    "BalanceTransaction": [
+        {"key": "transactionId", "label": "거래ID", "type": "string"},
+        {"key": "merchantId", "label": "가맹점ID", "type": "string"},
+        {"key": "sourceType", "label": "유형", "type": "string", "align": "center"},
+        {"key": "amount", "label": "금액", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "fee", "label": "수수료", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "net", "label": "순금액", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "balanceAfter", "label": "잔액", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "status", "label": "상태", "type": "string", "align": "center"},
+        {"key": "createdAt", "label": "거래시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"}
+    ],
+    "Settlement": [
+        {"key": "settlementId", "label": "정산ID", "type": "string"},
+        {"key": "merchantId", "label": "가맹점ID", "type": "string"},
+        {"key": "settlementDate", "label": "정산일", "type": "date", "format": "YYYY-MM-DD"},
+        {"key": "periodStart", "label": "기간시작", "type": "date", "format": "YYYY-MM-DD"},
+        {"key": "periodEnd", "label": "기간종료", "type": "date", "format": "YYYY-MM-DD"},
+        {"key": "totalPaymentAmount", "label": "총결제", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "totalRefundAmount", "label": "총환불", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "totalFee", "label": "수수료", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "netAmount", "label": "정산금액", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "paymentCount", "label": "결제건수", "type": "number", "align": "right"},
+        {"key": "status", "label": "상태", "type": "string", "align": "center"}
+    ],
+    "SettlementDetail": [
+        {"key": "detailId", "label": "상세ID", "type": "string"},
+        {"key": "settlementId", "label": "정산ID", "type": "string"},
+        {"key": "paymentKey", "label": "결제키", "type": "string"},
+        {"key": "amount", "label": "금액", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "fee", "label": "수수료", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "netAmount", "label": "정산금액", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "type", "label": "유형", "type": "string", "align": "center"}
     ]
 }
 
@@ -160,51 +256,196 @@ class RenderComposerService:
         else:
             return self._compose_text_spec(query_result, query_plan, user_message)
 
+    def _determine_chart_type(
+        self,
+        query_plan: Dict[str, Any],
+        rows: List[Dict[str, Any]],
+        user_message: str
+    ) -> str:
+        """쿼리 결과와 사용자 의도에 따라 최적 차트 타입 결정"""
+        group_by = query_plan.get("groupBy", [])
+        time_range = query_plan.get("timeRange")
+        message_lower = user_message.lower()
+
+        # 비율/점유율 관련 키워드 → pie chart
+        if any(kw in message_lower for kw in ["비율", "점유율", "분포", "비중", "퍼센트", "%"]):
+            return "pie"
+
+        # 시계열 데이터 (날짜 기준 그룹화) → line chart
+        date_fields = ["approvedAt", "createdAt", "settlementDate", "timestamp", "orderDate", "updatedAt"]
+        if group_by and any(field in group_by for field in date_fields):
+            return "line"
+
+        # timeRange가 있고 추이/추세 키워드 → line chart
+        if time_range and any(kw in message_lower for kw in ["추이", "추세", "변화", "trend", "일별", "월별", "주별"]):
+            return "line"
+
+        # 상태별, 결제수단별 등 카테고리 그룹화 → bar chart
+        category_fields = ["status", "method", "merchantId", "type", "level", "sourceType"]
+        if group_by and any(field in group_by for field in category_fields):
+            # 상태별 비율 관련 질문이면 pie
+            if "status" in group_by and any(kw in message_lower for kw in ["현황", "통계"]):
+                return "pie"
+            return "bar"
+
+        # 데이터 포인트가 적으면 (5개 이하) → bar, 많으면 → line
+        if len(rows) <= 5:
+            return "bar"
+
+        return "line"  # 기본값
+
+    def _is_date_field(self, field: str) -> bool:
+        """날짜 필드 여부 확인"""
+        date_fields = [
+            "approvedAt", "createdAt", "updatedAt", "settlementDate",
+            "timestamp", "periodStart", "periodEnd", "orderDate"
+        ]
+        return field in date_fields
+
+    def _get_axis_label(self, field: str) -> str:
+        """필드명을 사용자 친화적 레이블로 변환"""
+        labels = {
+            "status": "상태",
+            "method": "결제수단",
+            "merchantId": "가맹점",
+            "approvedAt": "승인일시",
+            "createdAt": "생성일시",
+            "settlementDate": "정산일",
+            "count": "건수",
+            "totalAmount": "총금액",
+            "paymentCount": "결제건수",
+            "amount": "금액",
+            "netAmount": "정산금액",
+            "totalPaymentAmount": "총결제금액",
+            "totalRefundAmount": "총환불금액",
+            "totalFee": "총수수료",
+            "sourceType": "거래유형",
+            "type": "유형",
+            "level": "로그레벨"
+        }
+        return labels.get(field, field)
+
+    def _get_series_name(self, aggregation: Dict[str, Any]) -> str:
+        """집계 정보를 시리즈 이름으로 변환"""
+        func = aggregation.get("function", "")
+        field = aggregation.get("field", "")
+        alias = aggregation.get("alias")
+
+        if alias:
+            return self._get_axis_label(alias)
+
+        names = {
+            ("count", "*"): "건수",
+            ("sum", "amount"): "총금액",
+            ("avg", "amount"): "평균금액",
+            ("max", "amount"): "최대금액",
+            ("min", "amount"): "최소금액",
+            ("sum", "totalAmount"): "총금액",
+            ("sum", "netAmount"): "정산금액",
+        }
+        return names.get((func, field), f"{func}({field})")
+
+    def _generate_chart_title(self, query_plan: Dict[str, Any], user_message: str) -> str:
+        """차트 제목 생성"""
+        entity = query_plan.get("entity", "")
+        group_by = query_plan.get("groupBy", [])
+
+        entity_names = {
+            "Payment": "결제",
+            "Refund": "환불",
+            "Settlement": "정산",
+            "Merchant": "가맹점",
+            "BalanceTransaction": "잔액거래",
+            "PaymentHistory": "결제이력",
+            "Order": "주문"
+        }
+        entity_name = entity_names.get(entity, entity)
+
+        if group_by:
+            group_labels = {
+                "status": "상태별",
+                "method": "결제수단별",
+                "merchantId": "가맹점별",
+                "approvedAt": "일별",
+                "createdAt": "일별",
+                "settlementDate": "일별",
+                "sourceType": "유형별",
+                "type": "유형별"
+            }
+            group_name = group_labels.get(group_by[0], "")
+            return f"{group_name} {entity_name} 현황"
+
+        return f"{entity_name} 분석 결과"
+
     def _compose_chart_spec(
         self,
         query_result: Dict[str, Any],
         query_plan: Dict[str, Any],
         user_message: str
     ) -> Dict[str, Any]:
-        """차트 형태의 RenderSpec 생성"""
+        """향상된 차트 형태의 RenderSpec 생성"""
         data = query_result.get("data", {})
         rows = data.get("rows", [])
         group_by = query_plan.get("groupBy", [])
         aggregations = query_plan.get("aggregations", [])
 
-        # 첫 번째 그룹화 필드를 X축으로
-        x_axis_key = group_by[0] if group_by else "category"
+        # 차트 타입 자동 결정
+        chart_type = self._determine_chart_type(query_plan, rows, user_message)
 
-        # 첫 번째 집계 결과를 Y축으로
+        # X축/Y축 키 설정
+        x_axis_key = group_by[0] if group_by else "category"
         y_axis_key = "count"
+
         if aggregations:
             first_agg = aggregations[0]
             y_axis_key = first_agg.get("alias") or f"{first_agg['function']}_{first_agg['field']}"
 
+        # 차트 타입별 설정
+        chart_config: Dict[str, Any] = {
+            "chartType": chart_type,
+            "dataRef": "data.rows",
+            "legend": True,
+            "tooltip": True
+        }
+
+        if chart_type == "pie":
+            # Pie 차트는 nameKey와 valueKey 사용
+            chart_config["nameKey"] = x_axis_key
+            chart_config["valueKey"] = y_axis_key
+        else:
+            # Line/Bar 차트는 axis 설정
+            chart_config["xAxis"] = {
+                "dataKey": x_axis_key,
+                "label": self._get_axis_label(x_axis_key),
+                "type": "time" if self._is_date_field(x_axis_key) else "category"
+            }
+            chart_config["yAxis"] = {
+                "dataKey": y_axis_key,
+                "label": self._get_axis_label(y_axis_key),
+                "type": "number"
+            }
+
+            # 다중 시리즈 지원 (여러 집계가 있는 경우)
+            if len(aggregations) > 1:
+                chart_config["series"] = [
+                    {
+                        "dataKey": agg.get("alias") or f"{agg['function']}_{agg['field']}",
+                        "name": self._get_series_name(agg),
+                        "type": "line" if chart_type == "line" else "bar"
+                    }
+                    for agg in aggregations
+                ]
+
         return {
             "type": "chart",
-            "title": f"'{user_message}' 분석 결과",
-            "description": "집계 결과를 시각화한 차트입니다.",
-            "chart": {
-                "chartType": "bar",
-                "dataRef": "data.rows",
-                "xAxis": {
-                    "dataKey": x_axis_key,
-                    "label": x_axis_key,
-                    "type": "category"
-                },
-                "yAxis": {
-                    "dataKey": y_axis_key,
-                    "label": y_axis_key,
-                    "type": "number"
-                },
-                "legend": True,
-                "tooltip": True
-            },
+            "title": self._generate_chart_title(query_plan, user_message),
+            "description": f"'{user_message}' 분석 결과입니다.",
+            "chart": chart_config,
             "data": data,
             "metadata": {
                 "requestId": query_result.get("requestId"),
-                "generatedAt": datetime.utcnow().isoformat() + "Z"
+                "generatedAt": datetime.utcnow().isoformat() + "Z",
+                "chartType": chart_type
             }
         }
 
@@ -326,11 +567,22 @@ class RenderComposerService:
     def _generate_title(self, entity: str, row_count: int) -> str:
         """엔티티에 맞는 제목 생성"""
         entity_names = {
+            # 기존 e-commerce 엔티티
             "Order": "주문",
             "Customer": "고객",
             "Product": "상품",
             "Inventory": "재고",
-            "PaymentLog": "결제 로그"
+            "PaymentLog": "결제 로그",
+            # PG 결제 도메인 엔티티
+            "Payment": "결제",
+            "Merchant": "가맹점",
+            "PgCustomer": "PG 고객",
+            "PaymentMethod": "결제수단",
+            "PaymentHistory": "결제 이력",
+            "Refund": "환불",
+            "BalanceTransaction": "잔액 거래",
+            "Settlement": "정산",
+            "SettlementDetail": "정산 상세"
         }
         name = entity_names.get(entity, entity)
         return f"{name} 목록 ({row_count}건)"

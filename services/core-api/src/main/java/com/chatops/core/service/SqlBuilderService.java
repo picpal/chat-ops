@@ -6,6 +6,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -181,9 +186,9 @@ public class SqlBuilderService {
             if (timestampField != null && start != null && end != null) {
                 String column = chatOpsProperties.getColumnName(entity, timestampField);
                 whereJoiner.add(column + " >= ?");
-                params.add(start);
+                params.add(parseDateTime(start));
                 whereJoiner.add(column + " <= ?");
-                params.add(end);
+                params.add(parseDateTime(end));
             }
         }
 
@@ -293,6 +298,35 @@ public class SqlBuilderService {
             return "createdAt";
         }
         return null;
+    }
+
+    /**
+     * ISO-8601 날짜 문자열을 OffsetDateTime으로 파싱
+     * 다양한 형식 지원: 2024-01-01T00:00:00Z, 2024-01-01T00:00:00, 2024-01-01
+     */
+    private OffsetDateTime parseDateTime(String dateTimeStr) {
+        try {
+            // ISO-8601 with offset (e.g., 2024-01-01T00:00:00Z)
+            return OffsetDateTime.parse(dateTimeStr);
+        } catch (DateTimeParseException e1) {
+            try {
+                // ISO-8601 without offset (e.g., 2024-01-01T00:00:00)
+                LocalDateTime localDateTime = LocalDateTime.parse(dateTimeStr);
+                return localDateTime.atOffset(ZoneOffset.UTC);
+            } catch (DateTimeParseException e2) {
+                try {
+                    // Date only (e.g., 2024-01-01)
+                    LocalDateTime localDateTime = LocalDateTime.parse(
+                            dateTimeStr + "T00:00:00",
+                            DateTimeFormatter.ISO_LOCAL_DATE_TIME
+                    );
+                    return localDateTime.atOffset(ZoneOffset.UTC);
+                } catch (DateTimeParseException e3) {
+                    log.warn("Failed to parse date time string: {}", dateTimeStr);
+                    throw new IllegalArgumentException("Invalid date time format: " + dateTimeStr);
+                }
+            }
+        }
     }
 
     /**

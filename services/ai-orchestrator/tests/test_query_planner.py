@@ -42,10 +42,10 @@ class TestQueryPlannerService:
         def setup_method(self):
             self.planner = QueryPlannerService(api_key="test-api-key")
 
-        def test_fallback_default_entity_is_order(self):
-            """기본 엔티티는 Order"""
+        def test_fallback_default_entity_is_payment(self):
+            """기본 엔티티는 Payment (결제 도메인 백오피스)"""
             result = self.planner._create_fallback_plan("뭔가 보여줘")
-            assert result["entity"] == "Order"
+            assert result["entity"] == "Payment"
             assert result["operation"] == "list"
             assert result["limit"] == 10
 
@@ -72,7 +72,8 @@ class TestQueryPlannerService:
 
         def test_fallback_detects_payment_log_keywords(self):
             """결제 로그 관련 키워드 감지"""
-            test_cases = ["결제 로그 보여줘", "에러 로그", "오류 내역"]
+            # "로그" 키워드가 명시적으로 있는 경우 PaymentLog로 매핑
+            test_cases = ["결제 로그 보여줘", "에러 로그", "시스템 로그"]
             for message in test_cases:
                 result = self.planner._create_fallback_plan(message)
                 assert result["entity"] == "PaymentLog", f"Failed for: {message}"
@@ -271,9 +272,16 @@ class TestPydanticModels:
         assert set(operators) == set(expected)
 
     def test_entity_types(self):
-        """EntityType 값 테스트"""
+        """EntityType 값 테스트 - PG 결제 도메인 엔티티 포함"""
         entities = [e.value for e in EntityType]
-        expected = ["Order", "Customer", "Product", "Inventory", "PaymentLog"]
+        expected = [
+            # 기존 e-commerce 엔티티
+            "Order", "Customer", "Product", "Inventory", "PaymentLog",
+            # PG 결제 도메인 엔티티
+            "Merchant", "PgCustomer", "PaymentMethod", "Payment",
+            "PaymentHistory", "Refund", "BalanceTransaction",
+            "Settlement", "SettlementDetail"
+        ]
         assert set(entities) == set(expected)
 
 
