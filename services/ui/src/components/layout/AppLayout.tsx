@@ -15,7 +15,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       <main className="flex-1 flex flex-col h-full relative min-w-0 bg-slate-50/50">
         <Header />
 
-        <div className="flex-1 overflow-y-auto p-6 md:p-10 space-y-6 scroll-smooth pb-64">
+        <div className="flex-1 overflow-y-auto pt-4 md:pt-8 px-6 md:px-10 space-y-6 scroll-smooth pb-64">
           {children}
         </div>
 
