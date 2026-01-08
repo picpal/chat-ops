@@ -60,6 +60,7 @@ export const ICONS = {
   SMART_TOY: 'smart_toy',
   SIDEBAR: 'left_panel_close',
   SIDEBAR_OPEN: 'left_panel_open',
+  MORE_HORIZ: 'more_horiz',
 } as const
 
 // App Configuration

@@ -31,20 +31,17 @@ const ChatInterface: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Messages */}
-      <div className="space-y-6">
-        {currentSession.messages.map((message) => (
-          <ChatMessage key={message.id} message={message} />
-        ))}
+      {currentSession.messages.map((message) => (
+        <ChatMessage key={message.id} message={message} />
+      ))}
 
-        {isLoading && (
-          <div className="flex items-center justify-center py-8">
-            <LoadingSpinner size="lg" />
-          </div>
-        )}
+      {isLoading && (
+        <div className="flex items-center justify-center py-8">
+          <LoadingSpinner size="lg" />
+        </div>
+      )}
 
-        <div ref={messagesEndRef} />
-      </div>
+      <div ref={messagesEndRef} />
     </div>
   )
 }
