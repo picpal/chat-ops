@@ -61,7 +61,7 @@ const Sidebar: React.FC = () => {
             onClick={handleNewChat}
             className="flex items-center gap-3 group"
           >
-            <span className="w-9 h-9 rounded-full bg-stone-900 flex items-center justify-center text-white shadow-sm group-hover:bg-blue-500 transition-colors">
+            <span className="w-9 h-9 rounded-full bg-blue-500 flex items-center justify-center text-white shadow-sm group-hover:bg-blue-600 transition-colors">
               <Icon name={ICONS.ADD_CIRCLE} className="text-[20px]" />
             </span>
             <span className="text-stone-700 text-[15px] font-medium group-hover:text-stone-900 transition-colors">
