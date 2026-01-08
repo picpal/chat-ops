@@ -43,11 +43,8 @@ const NewAnalysisModal: React.FC = () => {
 
       {/* Modal */}
       <div className="relative w-full max-w-sm bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden animate-fade-in-up transform transition-all">
-        {/* Gradient Header */}
-        <div className="h-1.5 w-full bg-gradient-to-r from-primary to-blue-400" />
-
         {/* Content */}
-        <div className="p-6">
+        <div className="px-6 py-6">
           {/* Header */}
           <div className="flex justify-between items-start mb-6">
             <div>

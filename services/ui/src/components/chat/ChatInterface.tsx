@@ -16,13 +16,13 @@ const ChatInterface: React.FC = () => {
 
   if (!currentSessionId || !currentSession) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
+      <div className="absolute inset-0 flex items-center justify-center -mt-16">
         <div className="text-center">
-          <h2 className="text-xl font-bold text-slate-800 mb-2">
+          <h2 className="text-xl font-semibold text-stone-800 mb-2">
             No active session
           </h2>
-          <p className="text-slate-600">
-            Click "New Analysis" in the sidebar to start a conversation
+          <p className="text-stone-500">
+            Click "새 채팅" in the sidebar to start a conversation
           </p>
         </div>
       </div>
@@ -31,24 +31,8 @@ const ChatInterface: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Session Header */}
-      <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
-        <h2 className="text-lg font-bold text-slate-900">{currentSession.title}</h2>
-        {currentSession.subtitle && (
-          <p className="text-sm text-slate-500 mt-1">{currentSession.subtitle}</p>
-        )}
-      </div>
-
       {/* Messages */}
       <div className="space-y-6">
-        {currentSession.messages.length === 0 && !isLoading && (
-          <div className="text-center py-12">
-            <p className="text-slate-500">
-              No messages yet. Start by asking a question below.
-            </p>
-          </div>
-        )}
-
         {currentSession.messages.map((message) => (
           <ChatMessage key={message.id} message={message} />
         ))}

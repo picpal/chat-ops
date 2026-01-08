@@ -8,7 +8,15 @@ const ChatPanel: React.FC = () => {
   const [message, setMessage] = useState('')
   const [isFocused, setIsFocused] = useState(false)
   const { sendMessage, isLoading } = useChat()
-  const { currentSessionId } = useChatStore()
+  const { currentSessionId, sessions } = useChatStore()
+
+  const currentSession = sessions.find((s) => s.id === currentSessionId)
+  const hasMessages = currentSession && currentSession.messages.length > 0
+
+  // Hide chat panel when no session is active
+  if (!currentSessionId) {
+    return null
+  }
 
   const handleSend = () => {
     if (!message.trim() || !currentSessionId) return
@@ -29,7 +37,17 @@ const ChatPanel: React.FC = () => {
   }
 
   return (
-    <div className="absolute bottom-0 left-0 right-0 z-30 flex justify-center px-6 pb-6 pointer-events-none">
+    <div className={`absolute left-0 right-0 z-30 flex flex-col items-center px-6 pointer-events-none transition-all duration-300 ${
+      hasMessages ? 'bottom-0 pb-6' : 'top-[41%] -translate-y-1/2'
+    }`}>
+      {/* Greeting Message */}
+      {!hasMessages && currentSessionId && (
+        <div className="text-center mb-8 pointer-events-none">
+          <h2 className="text-2xl font-semibold text-stone-800 mb-2">무엇을 도와드릴까요?</h2>
+          <p className="text-stone-500 text-sm">결제, 정산, 거래 내역 등 궁금한 것을 물어보세요</p>
+        </div>
+      )}
+
       <div className={`w-full max-w-3xl relative z-10 flex flex-col bg-white/95 backdrop-blur-md border-2 shadow-xl rounded-2xl overflow-hidden pointer-events-auto transition-all duration-200 ${
         isFocused
           ? 'border-primary/60 shadow-primary/10'
