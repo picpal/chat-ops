@@ -54,6 +54,12 @@ export const ICONS = {
   CHECK_CIRCLE: 'check_circle',
   CLEANING_SERVICES: 'cleaning_services',
   CHAT: 'chat',
+  MENU: 'menu',
+  MENU_OPEN: 'menu_open',
+  EDIT_SQUARE: 'edit_square',
+  SMART_TOY: 'smart_toy',
+  SIDEBAR: 'left_panel_close',
+  SIDEBAR_OPEN: 'left_panel_open',
 } as const
 
 // App Configuration
