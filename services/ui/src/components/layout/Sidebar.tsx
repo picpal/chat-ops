@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import { useChatStore, useUIStore } from '@/store'
 import { Icon } from '@/components/common'
 import { SESSION_CATEGORIES, ICONS } from '@/utils'
@@ -8,6 +8,19 @@ const Sidebar: React.FC = () => {
   const { sessions, currentSessionId, setCurrentSession } =
     useChatStore()
   const { openModal, sidebarCollapsed, toggleSidebar } = useUIStore()
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
+  const userMenuRef = useRef<HTMLDivElement>(null)
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setIsUserMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   const handleNewChat = () => {
     openModal('newAnalysis')
@@ -114,6 +127,34 @@ const Sidebar: React.FC = () => {
               )
             }
           )}
+        </div>
+
+        {/* Footer - User Profile */}
+        <div className="px-2 py-2 shrink-0 relative" ref={userMenuRef}>
+          {/* Popup Menu */}
+          {isUserMenuOpen && (
+            <div className="absolute bottom-full left-2 right-2 mb-1 bg-white rounded-lg shadow-lg border border-stone-200 py-1 z-50">
+              <button className="w-full px-3 py-2 text-left text-sm text-stone-700 hover:bg-stone-100 flex items-center gap-2">
+                <Icon name={ICONS.SETTINGS} className="text-[18px] text-stone-500" />
+                설정
+              </button>
+              <button className="w-full px-3 py-2 text-left text-sm text-stone-700 hover:bg-stone-100 flex items-center gap-2">
+                <Icon name={ICONS.LOGOUT} className="text-[18px] text-stone-500" />
+                로그아웃
+              </button>
+            </div>
+          )}
+
+          {/* User Profile Button */}
+          <button
+            onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+            className="w-full px-2 py-2 rounded-lg flex items-center gap-3 hover:bg-stone-200/50 transition-colors"
+          >
+            <div className="w-8 h-8 rounded-full bg-stone-300 flex items-center justify-center text-stone-600 text-sm font-medium">
+              U
+            </div>
+            <span className="text-sm text-stone-700 truncate flex-1 text-left">user@example.com</span>
+          </button>
         </div>
       </div>
     </aside>
