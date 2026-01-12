@@ -5,8 +5,9 @@ pgvector를 사용한 벡터 유사도 검색
 
 import os
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass
+from datetime import datetime
 
 import psycopg
 from pgvector.psycopg import register_vector
@@ -22,7 +23,16 @@ class Document:
     title: str
     content: str
     metadata: Dict[str, Any]
+    status: str = "active"
     similarity: float = 0.0
+    has_embedding: bool = False
+    submitted_by: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    rejection_reason: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 class RAGService:
@@ -125,13 +135,14 @@ class RAGService:
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cur:
-                    # 기본 쿼리
+                    # 기본 쿼리 (active 상태만 검색)
                     sql = """
                         SELECT
                             id, doc_type, title, content, metadata,
                             1 - (embedding <=> %s::vector) as similarity
                         FROM documents
                         WHERE embedding IS NOT NULL
+                          AND status = 'active'
                     """
                     params = [query_embedding]
 
@@ -181,13 +192,14 @@ class RAGService:
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cur:
-                    # PostgreSQL 전문 검색 사용 (simple config for compatibility)
+                    # PostgreSQL 전문 검색 사용 (simple config for compatibility, active만)
                     sql = """
                         SELECT
                             id, doc_type, title, content, metadata,
                             ts_rank(to_tsvector('simple', content), plainto_tsquery('simple', %s)) as rank
                         FROM documents
                         WHERE to_tsvector('simple', content) @@ plainto_tsquery('simple', %s)
+                          AND status = 'active'
                     """
                     params = [query, query]
 
@@ -240,7 +252,8 @@ class RAGService:
                     sql = """
                         SELECT id, doc_type, title, content, metadata
                         FROM documents
-                        WHERE content ILIKE %s OR title ILIKE %s
+                        WHERE (content ILIKE %s OR title ILIKE %s)
+                          AND status = 'active'
                     """
                     pattern = f"%{query}%"
                     params = [pattern, pattern]
@@ -278,7 +291,9 @@ class RAGService:
         doc_type: str,
         title: str,
         content: str,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        status: str = "pending",
+        submitted_by: Optional[str] = None
     ) -> int:
         """
         새 문서 추가
@@ -288,11 +303,13 @@ class RAGService:
             title: 문서 제목
             content: 문서 내용
             metadata: 추가 메타데이터
+            status: 문서 상태 (기본: pending)
+            submitted_by: 제출자 ID/이름
 
         Returns:
             생성된 문서 ID
         """
-        logger.info(f"Adding document: {title}")
+        logger.info(f"Adding document: {title} (status={status})")
 
         embedding = None
         if self.openai_api_key:
@@ -306,20 +323,20 @@ class RAGService:
                 if embedding:
                     cur.execute(
                         """
-                        INSERT INTO documents (doc_type, title, content, embedding, metadata)
-                        VALUES (%s, %s, %s, %s::vector, %s)
+                        INSERT INTO documents (doc_type, title, content, embedding, metadata, status, submitted_by, submitted_at)
+                        VALUES (%s, %s, %s, %s::vector, %s, %s, %s, CURRENT_TIMESTAMP)
                         RETURNING id
                         """,
-                        (doc_type, title, content, embedding, metadata or {})
+                        (doc_type, title, content, embedding, metadata or {}, status, submitted_by)
                     )
                 else:
                     cur.execute(
                         """
-                        INSERT INTO documents (doc_type, title, content, metadata)
-                        VALUES (%s, %s, %s, %s)
+                        INSERT INTO documents (doc_type, title, content, metadata, status, submitted_by, submitted_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
                         RETURNING id
                         """,
-                        (doc_type, title, content, metadata or {})
+                        (doc_type, title, content, metadata or {}, status, submitted_by)
                     )
                 doc_id = cur.fetchone()[0]
                 conn.commit()
@@ -412,6 +429,678 @@ class RAGService:
             logger.error(f"Failed to get document count: {e}")
 
         return counts
+
+    # === CRUD 메서드 ===
+
+    async def get_document(self, doc_id: int) -> Optional[Document]:
+        """
+        ID로 단일 문서 조회
+
+        Args:
+            doc_id: 문서 ID
+
+        Returns:
+            Document 또는 None (없는 경우)
+        """
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT id, doc_type, title, content, metadata, status,
+                               embedding IS NOT NULL as has_embedding,
+                               submitted_by, submitted_at, reviewed_by, reviewed_at, rejection_reason,
+                               created_at, updated_at
+                        FROM documents
+                        WHERE id = %s
+                        """,
+                        (doc_id,)
+                    )
+                    row = cur.fetchone()
+
+                    if row:
+                        return Document(
+                            id=row[0],
+                            doc_type=row[1],
+                            title=row[2],
+                            content=row[3],
+                            metadata=row[4] or {},
+                            status=row[5],
+                            has_embedding=row[6],
+                            submitted_by=row[7],
+                            submitted_at=row[8],
+                            reviewed_by=row[9],
+                            reviewed_at=row[10],
+                            rejection_reason=row[11],
+                            created_at=row[12],
+                            updated_at=row[13]
+                        )
+                    return None
+
+        except Exception as e:
+            logger.error(f"Failed to get document {doc_id}: {e}")
+            return None
+
+    async def list_documents(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        doc_type: Optional[str] = None,
+        status: Optional[str] = None,
+        has_embedding: Optional[bool] = None,
+        search_query: Optional[str] = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc"
+    ) -> Tuple[List[Document], int]:
+        """
+        페이지네이션된 문서 목록 조회
+
+        Args:
+            page: 페이지 번호 (1부터 시작)
+            page_size: 페이지 크기
+            doc_type: 필터링할 문서 타입
+            status: 필터링할 문서 상태 (pending, active, rejected)
+            has_embedding: 임베딩 존재 여부 필터
+            search_query: 제목/내용 검색어
+            sort_by: 정렬 필드 (created_at, updated_at, title)
+            sort_order: 정렬 방향 (asc, desc)
+
+        Returns:
+            (문서 리스트, 전체 개수) 튜플
+        """
+        documents = []
+        total = 0
+        offset = (page - 1) * page_size
+
+        # SQL injection 방지를 위한 화이트리스트
+        allowed_sort_fields = {"created_at", "updated_at", "title", "doc_type", "id", "status"}
+        sort_column = sort_by if sort_by in allowed_sort_fields else "created_at"
+        sort_dir = "DESC" if sort_order.lower() == "desc" else "ASC"
+
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    # 동적 WHERE 절 구성
+                    conditions = []
+                    params = []
+
+                    if doc_type:
+                        conditions.append("doc_type = %s")
+                        params.append(doc_type)
+
+                    if status:
+                        conditions.append("status = %s")
+                        params.append(status)
+
+                    if has_embedding is not None:
+                        if has_embedding:
+                            conditions.append("embedding IS NOT NULL")
+                        else:
+                            conditions.append("embedding IS NULL")
+
+                    if search_query:
+                        conditions.append("(title ILIKE %s OR content ILIKE %s)")
+                        params.extend([f"%{search_query}%", f"%{search_query}%"])
+
+                    where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+                    # 전체 개수 조회
+                    count_sql = f"SELECT COUNT(*) FROM documents {where_clause}"
+                    cur.execute(count_sql, params)
+                    total = cur.fetchone()[0]
+
+                    # 데이터 조회
+                    data_sql = f"""
+                        SELECT id, doc_type, title, content, metadata, status,
+                               embedding IS NOT NULL as has_embedding,
+                               submitted_by, submitted_at, reviewed_by, reviewed_at, rejection_reason,
+                               created_at, updated_at
+                        FROM documents
+                        {where_clause}
+                        ORDER BY {sort_column} {sort_dir}
+                        LIMIT %s OFFSET %s
+                    """
+                    cur.execute(data_sql, params + [page_size, offset])
+                    rows = cur.fetchall()
+
+                    for row in rows:
+                        documents.append(Document(
+                            id=row[0],
+                            doc_type=row[1],
+                            title=row[2],
+                            content=row[3],
+                            metadata=row[4] or {},
+                            status=row[5],
+                            has_embedding=row[6],
+                            submitted_by=row[7],
+                            submitted_at=row[8],
+                            reviewed_by=row[9],
+                            reviewed_at=row[10],
+                            rejection_reason=row[11],
+                            created_at=row[12],
+                            updated_at=row[13]
+                        ))
+
+            logger.info(f"Listed {len(documents)} documents (page {page}, total {total})")
+
+        except Exception as e:
+            logger.error(f"Failed to list documents: {e}")
+
+        return documents, total
+
+    async def update_document(
+        self,
+        doc_id: int,
+        doc_type: Optional[str] = None,
+        title: Optional[str] = None,
+        content: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        regenerate_embedding: bool = True
+    ) -> Optional[Document]:
+        """
+        문서 수정
+
+        Args:
+            doc_id: 수정할 문서 ID
+            doc_type: 새 문서 타입 (None이면 유지)
+            title: 새 제목 (None이면 유지)
+            content: 새 내용 (None이면 유지)
+            metadata: 새 메타데이터 (None이면 유지)
+            regenerate_embedding: content 변경 시 임베딩 재생성 여부
+
+        Returns:
+            수정된 Document 또는 None
+        """
+        logger.info(f"Updating document {doc_id}")
+
+        # 기존 문서 확인
+        existing = await self.get_document(doc_id)
+        if not existing:
+            logger.warning(f"Document {doc_id} not found")
+            return None
+
+        # 업데이트할 필드 구성
+        updates = []
+        params = []
+
+        if doc_type is not None:
+            updates.append("doc_type = %s")
+            params.append(doc_type)
+
+        if title is not None:
+            updates.append("title = %s")
+            params.append(title)
+
+        if content is not None:
+            updates.append("content = %s")
+            params.append(content)
+
+            # 내용 변경 시 임베딩 재생성
+            if regenerate_embedding and self.openai_api_key:
+                try:
+                    embedding = await self._create_embedding(content)
+                    updates.append("embedding = %s::vector")
+                    params.append(embedding)
+                except Exception as e:
+                    logger.warning(f"Failed to regenerate embedding: {e}")
+
+        if metadata is not None:
+            updates.append("metadata = %s")
+            params.append(metadata)
+
+        if not updates:
+            return existing
+
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(doc_id)
+
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    sql = f"""
+                        UPDATE documents
+                        SET {', '.join(updates)}
+                        WHERE id = %s
+                    """
+                    cur.execute(sql, params)
+                    conn.commit()
+
+            logger.info(f"Document {doc_id} updated successfully")
+            return await self.get_document(doc_id)
+
+        except Exception as e:
+            logger.error(f"Failed to update document {doc_id}: {e}")
+            return None
+
+    async def delete_document(self, doc_id: int) -> bool:
+        """
+        문서 삭제
+
+        Args:
+            doc_id: 삭제할 문서 ID
+
+        Returns:
+            삭제 성공 여부
+        """
+        logger.info(f"Deleting document {doc_id}")
+
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM documents WHERE id = %s", (doc_id,))
+                    deleted = cur.rowcount > 0
+                    conn.commit()
+
+            if deleted:
+                logger.info(f"Document {doc_id} deleted successfully")
+            else:
+                logger.warning(f"Document {doc_id} not found for deletion")
+
+            return deleted
+
+        except Exception as e:
+            logger.error(f"Failed to delete document {doc_id}: {e}")
+            return False
+
+    async def bulk_add_documents(
+        self,
+        documents: List[Dict[str, Any]],
+        skip_embedding: bool = False
+    ) -> Tuple[int, List[Dict[str, Any]]]:
+        """
+        대량 문서 추가
+
+        Args:
+            documents: 추가할 문서 목록 [{doc_type, title, content, metadata}, ...]
+            skip_embedding: 임베딩 생성 건너뛰기
+
+        Returns:
+            (성공 개수, 실패 목록) 튜플
+        """
+        logger.info(f"Bulk adding {len(documents)} documents")
+
+        success_count = 0
+        failures = []
+
+        for idx, doc in enumerate(documents):
+            try:
+                embedding = None
+                if not skip_embedding and self.openai_api_key:
+                    try:
+                        embedding = await self._create_embedding(doc.get("content", ""))
+                    except Exception as e:
+                        logger.warning(f"Failed to create embedding for doc {idx}: {e}")
+
+                with self._get_connection() as conn:
+                    with conn.cursor() as cur:
+                        if embedding:
+                            cur.execute(
+                                """
+                                INSERT INTO documents (doc_type, title, content, embedding, metadata)
+                                VALUES (%s, %s, %s, %s::vector, %s)
+                                RETURNING id
+                                """,
+                                (
+                                    doc.get("doc_type"),
+                                    doc.get("title"),
+                                    doc.get("content"),
+                                    embedding,
+                                    doc.get("metadata") or {}
+                                )
+                            )
+                        else:
+                            cur.execute(
+                                """
+                                INSERT INTO documents (doc_type, title, content, metadata)
+                                VALUES (%s, %s, %s, %s)
+                                RETURNING id
+                                """,
+                                (
+                                    doc.get("doc_type"),
+                                    doc.get("title"),
+                                    doc.get("content"),
+                                    doc.get("metadata") or {}
+                                )
+                            )
+                        conn.commit()
+                        success_count += 1
+
+            except Exception as e:
+                logger.error(f"Failed to add document at index {idx}: {e}")
+                failures.append({
+                    "index": idx,
+                    "title": doc.get("title"),
+                    "error": str(e)
+                })
+
+        logger.info(f"Bulk add completed: {success_count} success, {len(failures)} failed")
+        return success_count, failures
+
+    async def bulk_delete_documents(self, ids: List[int]) -> Tuple[int, List[int]]:
+        """
+        대량 문서 삭제
+
+        Args:
+            ids: 삭제할 문서 ID 목록
+
+        Returns:
+            (성공 개수, 실패 ID 목록) 튜플
+        """
+        logger.info(f"Bulk deleting {len(ids)} documents")
+
+        success_count = 0
+        failed_ids = []
+
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    for doc_id in ids:
+                        try:
+                            cur.execute("DELETE FROM documents WHERE id = %s", (doc_id,))
+                            if cur.rowcount > 0:
+                                success_count += 1
+                            else:
+                                failed_ids.append(doc_id)
+                        except Exception as e:
+                            logger.error(f"Failed to delete document {doc_id}: {e}")
+                            failed_ids.append(doc_id)
+
+                    conn.commit()
+
+        except Exception as e:
+            logger.error(f"Bulk delete transaction failed: {e}")
+            failed_ids = ids
+
+        logger.info(f"Bulk delete completed: {success_count} success, {len(failed_ids)} failed")
+        return success_count, failed_ids
+
+    async def get_document_stats(self) -> Dict[str, Any]:
+        """
+        문서 통계 조회 (확장)
+
+        Returns:
+            통계 정보 딕셔너리
+        """
+        stats = {
+            "total_count": 0,
+            "by_type": {},
+            "by_status": {"pending": 0, "active": 0, "rejected": 0},
+            "embedding_status": {"with_embedding": 0, "without_embedding": 0},
+            "last_updated": None
+        }
+
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    # 전체 개수
+                    cur.execute("SELECT COUNT(*) FROM documents")
+                    stats["total_count"] = cur.fetchone()[0]
+
+                    # 타입별 개수
+                    cur.execute("""
+                        SELECT doc_type, COUNT(*) as count
+                        FROM documents
+                        GROUP BY doc_type
+                    """)
+                    for row in cur.fetchall():
+                        stats["by_type"][row[0]] = row[1]
+
+                    # 상태별 개수
+                    cur.execute("""
+                        SELECT status, COUNT(*) as count
+                        FROM documents
+                        GROUP BY status
+                    """)
+                    for row in cur.fetchall():
+                        stats["by_status"][row[0]] = row[1]
+
+                    # 임베딩 상태
+                    cur.execute("""
+                        SELECT
+                            COUNT(*) FILTER (WHERE embedding IS NOT NULL) as with_embedding,
+                            COUNT(*) FILTER (WHERE embedding IS NULL) as without_embedding
+                        FROM documents
+                    """)
+                    row = cur.fetchone()
+                    stats["embedding_status"]["with_embedding"] = row[0]
+                    stats["embedding_status"]["without_embedding"] = row[1]
+
+                    # 최근 업데이트 시간
+                    cur.execute("SELECT MAX(updated_at) FROM documents")
+                    stats["last_updated"] = cur.fetchone()[0]
+
+        except Exception as e:
+            logger.error(f"Failed to get document stats: {e}")
+
+        return stats
+
+    async def refresh_embeddings(
+        self,
+        force_all: bool = False,
+        doc_types: Optional[List[str]] = None,
+        batch_size: int = 50
+    ) -> Dict[str, int]:
+        """
+        임베딩 갱신
+
+        Args:
+            force_all: True면 전체 재생성, False면 없는 것만
+            doc_types: 특정 타입만 갱신 (None이면 전체)
+            batch_size: 배치 크기
+
+        Returns:
+            {"processed": n, "updated": n, "failed": n, "remaining": n}
+        """
+        result = {"processed": 0, "updated": 0, "failed": 0, "remaining": 0}
+
+        if not self.openai_api_key:
+            logger.warning("OPENAI_API_KEY not set, cannot refresh embeddings")
+            return result
+
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    # 대상 문서 조회
+                    conditions = []
+                    params = []
+
+                    if not force_all:
+                        conditions.append("embedding IS NULL")
+
+                    if doc_types:
+                        conditions.append("doc_type = ANY(%s)")
+                        params.append(doc_types)
+
+                    where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+                    # 전체 대상 개수
+                    cur.execute(f"SELECT COUNT(*) FROM documents {where_clause}", params)
+                    total_target = cur.fetchone()[0]
+
+                    # 배치 조회
+                    cur.execute(
+                        f"""
+                        SELECT id, title, content FROM documents
+                        {where_clause}
+                        LIMIT %s
+                        """,
+                        params + [batch_size]
+                    )
+                    rows = cur.fetchall()
+
+                    for row in rows:
+                        doc_id, title, content = row
+                        result["processed"] += 1
+
+                        try:
+                            text = f"{title}\n\n{content}"
+                            embedding = await self._create_embedding(text)
+                            cur.execute(
+                                "UPDATE documents SET embedding = %s::vector, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+                                (embedding, doc_id)
+                            )
+                            result["updated"] += 1
+                        except Exception as e:
+                            logger.error(f"Failed to update embedding for doc {doc_id}: {e}")
+                            result["failed"] += 1
+
+                    conn.commit()
+                    result["remaining"] = total_target - result["processed"]
+
+        except Exception as e:
+            logger.error(f"Refresh embeddings failed: {e}")
+
+        logger.info(f"Refresh embeddings completed: {result}")
+        return result
+
+    async def document_exists(self, doc_id: int) -> bool:
+        """
+        문서 존재 여부 확인
+
+        Args:
+            doc_id: 문서 ID
+
+        Returns:
+            존재 여부
+        """
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1 FROM documents WHERE id = %s", (doc_id,))
+                    return cur.fetchone() is not None
+        except Exception as e:
+            logger.error(f"Failed to check document existence: {e}")
+            return False
+
+    # === 승인/반려 메서드 ===
+
+    async def approve_document(self, doc_id: int, reviewed_by: str) -> Optional[Document]:
+        """
+        문서 승인
+
+        Args:
+            doc_id: 문서 ID
+            reviewed_by: 검토자 ID/이름
+
+        Returns:
+            승인된 Document 또는 None
+        """
+        logger.info(f"Approving document {doc_id} by {reviewed_by}")
+
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE documents
+                        SET status = 'active',
+                            reviewed_by = %s,
+                            reviewed_at = CURRENT_TIMESTAMP,
+                            rejection_reason = NULL,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = %s AND status = 'pending'
+                        """,
+                        (reviewed_by, doc_id)
+                    )
+                    updated = cur.rowcount > 0
+                    conn.commit()
+
+            if updated:
+                logger.info(f"Document {doc_id} approved by {reviewed_by}")
+                return await self.get_document(doc_id)
+            else:
+                logger.warning(f"Document {doc_id} not found or not pending")
+                return None
+
+        except Exception as e:
+            logger.error(f"Failed to approve document {doc_id}: {e}")
+            return None
+
+    async def reject_document(
+        self,
+        doc_id: int,
+        reviewed_by: str,
+        reason: str
+    ) -> Optional[Document]:
+        """
+        문서 반려
+
+        Args:
+            doc_id: 문서 ID
+            reviewed_by: 검토자 ID/이름
+            reason: 반려 사유
+
+        Returns:
+            반려된 Document 또는 None
+        """
+        logger.info(f"Rejecting document {doc_id} by {reviewed_by}")
+
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE documents
+                        SET status = 'rejected',
+                            reviewed_by = %s,
+                            reviewed_at = CURRENT_TIMESTAMP,
+                            rejection_reason = %s,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = %s AND status = 'pending'
+                        """,
+                        (reviewed_by, reason, doc_id)
+                    )
+                    updated = cur.rowcount > 0
+                    conn.commit()
+
+            if updated:
+                logger.info(f"Document {doc_id} rejected by {reviewed_by}")
+                return await self.get_document(doc_id)
+            else:
+                logger.warning(f"Document {doc_id} not found or not pending")
+                return None
+
+        except Exception as e:
+            logger.error(f"Failed to reject document {doc_id}: {e}")
+            return None
+
+    async def bulk_review_documents(
+        self,
+        ids: List[int],
+        action: str,
+        reviewed_by: str,
+        reason: Optional[str] = None
+    ) -> Tuple[int, List[int]]:
+        """
+        대량 문서 승인/반려
+
+        Args:
+            ids: 문서 ID 목록
+            action: 'approve' 또는 'reject'
+            reviewed_by: 검토자 ID/이름
+            reason: 반려 사유 (reject 시)
+
+        Returns:
+            (성공 개수, 실패 ID 목록) 튜플
+        """
+        logger.info(f"Bulk {action} {len(ids)} documents by {reviewed_by}")
+
+        success_count = 0
+        failed_ids = []
+
+        for doc_id in ids:
+            if action == "approve":
+                result = await self.approve_document(doc_id, reviewed_by)
+            else:
+                result = await self.reject_document(doc_id, reviewed_by, reason or "")
+
+            if result:
+                success_count += 1
+            else:
+                failed_ids.append(doc_id)
+
+        logger.info(f"Bulk {action} completed: {success_count} success, {len(failed_ids)} failed")
+        return success_count, failed_ids
 
 
 # 싱글톤 인스턴스

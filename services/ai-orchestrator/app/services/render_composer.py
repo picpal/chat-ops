@@ -16,129 +16,129 @@ ENTITY_COLUMNS = {
     # 기존 e-commerce 엔티티
     # ============================================
     "Order": [
-        {"key": "orderId", "label": "주문 ID", "type": "number", "align": "center"},
-        {"key": "customerId", "label": "고객 ID", "type": "number", "align": "center"},
-        {"key": "orderDate", "label": "주문일시", "type": "date", "format": "YYYY-MM-DD HH:mm"},
-        {"key": "totalAmount", "label": "주문금액", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "order_id", "label": "주문 ID", "type": "number", "align": "center"},
+        {"key": "customer_id", "label": "고객 ID", "type": "number", "align": "center"},
+        {"key": "order_date", "label": "주문일시", "type": "date", "format": "YYYY-MM-DD HH:mm"},
+        {"key": "total_amount", "label": "주문금액", "type": "currency", "format": "currency:KRW", "align": "right"},
         {"key": "status", "label": "상태", "type": "string", "align": "center"},
-        {"key": "paymentGateway", "label": "결제수단", "type": "string", "align": "center"}
+        {"key": "payment_gateway", "label": "결제수단", "type": "string", "align": "center"}
     ],
     "Customer": [
-        {"key": "customerId", "label": "고객 ID", "type": "number", "align": "center"},
+        {"key": "customer_id", "label": "고객 ID", "type": "number", "align": "center"},
         {"key": "name", "label": "이름", "type": "string"},
         {"key": "email", "label": "이메일", "type": "string"},
         {"key": "phone", "label": "전화번호", "type": "string"}
     ],
     "Product": [
-        {"key": "productId", "label": "상품 ID", "type": "number", "align": "center"},
+        {"key": "product_id", "label": "상품 ID", "type": "number", "align": "center"},
         {"key": "name", "label": "상품명", "type": "string"},
         {"key": "price", "label": "가격", "type": "currency", "format": "currency:KRW", "align": "right"},
         {"key": "category", "label": "카테고리", "type": "string"}
     ],
     "Inventory": [
-        {"key": "inventoryId", "label": "재고 ID", "type": "number", "align": "center"},
-        {"key": "productId", "label": "상품 ID", "type": "number", "align": "center"},
+        {"key": "inventory_id", "label": "재고 ID", "type": "number", "align": "center"},
+        {"key": "product_id", "label": "상품 ID", "type": "number", "align": "center"},
         {"key": "quantity", "label": "수량", "type": "number", "align": "right"},
         {"key": "warehouse", "label": "창고", "type": "string"}
     ],
     "PaymentLog": [
         {"key": "timestamp", "label": "시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"},
         {"key": "level", "label": "레벨", "type": "string", "align": "center"},
-        {"key": "orderId", "label": "주문 ID", "type": "number", "align": "center"},
+        {"key": "order_id", "label": "주문 ID", "type": "number", "align": "center"},
         {"key": "message", "label": "메시지", "type": "string"},
-        {"key": "errorCode", "label": "에러코드", "type": "string", "align": "center"}
+        {"key": "error_code", "label": "에러코드", "type": "string", "align": "center"}
     ],
     # ============================================
     # PG 결제 도메인 엔티티
     # ============================================
     "Payment": [
-        {"key": "paymentKey", "label": "결제키", "type": "string", "width": "120px"},
-        {"key": "orderId", "label": "주문번호", "type": "string"},
-        {"key": "merchantId", "label": "가맹점ID", "type": "string"},
-        {"key": "orderName", "label": "주문명", "type": "string"},
+        {"key": "payment_key", "label": "결제키", "type": "string", "width": "120px"},
+        {"key": "order_id", "label": "주문번호", "type": "string"},
+        {"key": "merchant_id", "label": "가맹점ID", "type": "string"},
+        {"key": "order_name", "label": "주문명", "type": "string"},
         {"key": "amount", "label": "결제금액", "type": "currency", "format": "currency:KRW", "align": "right"},
         {"key": "method", "label": "결제수단", "type": "string", "align": "center"},
         {"key": "status", "label": "상태", "type": "string", "align": "center"},
-        {"key": "approvedAt", "label": "승인시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"},
-        {"key": "createdAt", "label": "생성시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"}
+        {"key": "approved_at", "label": "승인시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"},
+        {"key": "created_at", "label": "생성시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"}
     ],
     "Merchant": [
-        {"key": "merchantId", "label": "가맹점ID", "type": "string"},
-        {"key": "businessName", "label": "사업체명", "type": "string"},
-        {"key": "businessNumber", "label": "사업자번호", "type": "string"},
-        {"key": "representativeName", "label": "대표자", "type": "string"},
+        {"key": "merchant_id", "label": "가맹점ID", "type": "string"},
+        {"key": "business_name", "label": "사업체명", "type": "string"},
+        {"key": "business_number", "label": "사업자번호", "type": "string"},
+        {"key": "representative_name", "label": "대표자", "type": "string"},
         {"key": "status", "label": "상태", "type": "string", "align": "center"},
-        {"key": "feeRate", "label": "수수료율", "type": "percentage", "format": "0.00%", "align": "right"},
-        {"key": "settlementCycle", "label": "정산주기", "type": "string", "align": "center"},
-        {"key": "createdAt", "label": "등록일", "type": "date", "format": "YYYY-MM-DD"}
+        {"key": "fee_rate", "label": "수수료율", "type": "percentage", "format": "0.00%", "align": "right"},
+        {"key": "settlement_cycle", "label": "정산주기", "type": "string", "align": "center"},
+        {"key": "created_at", "label": "등록일", "type": "date", "format": "YYYY-MM-DD"}
     ],
     "PgCustomer": [
-        {"key": "customerId", "label": "고객ID", "type": "string"},
-        {"key": "merchantId", "label": "가맹점ID", "type": "string"},
+        {"key": "customer_id", "label": "고객ID", "type": "string"},
+        {"key": "merchant_id", "label": "가맹점ID", "type": "string"},
         {"key": "name", "label": "고객명", "type": "string"},
         {"key": "email", "label": "이메일", "type": "string"},
         {"key": "phone", "label": "전화번호", "type": "string"},
-        {"key": "createdAt", "label": "등록일", "type": "date", "format": "YYYY-MM-DD"}
+        {"key": "created_at", "label": "등록일", "type": "date", "format": "YYYY-MM-DD"}
     ],
     "PaymentMethod": [
-        {"key": "paymentMethodId", "label": "결제수단ID", "type": "string"},
-        {"key": "customerId", "label": "고객ID", "type": "string"},
+        {"key": "payment_method_id", "label": "결제수단ID", "type": "string"},
+        {"key": "customer_id", "label": "고객ID", "type": "string"},
         {"key": "type", "label": "유형", "type": "string", "align": "center"},
-        {"key": "cardCompany", "label": "카드사", "type": "string"},
-        {"key": "cardNumberMasked", "label": "카드번호", "type": "string"},
+        {"key": "card_company", "label": "카드사", "type": "string"},
+        {"key": "card_number_masked", "label": "카드번호", "type": "string"},
         {"key": "status", "label": "상태", "type": "string", "align": "center"},
-        {"key": "isDefault", "label": "기본", "type": "boolean", "align": "center"},
-        {"key": "createdAt", "label": "등록일", "type": "date", "format": "YYYY-MM-DD"}
+        {"key": "is_default", "label": "기본", "type": "boolean", "align": "center"},
+        {"key": "created_at", "label": "등록일", "type": "date", "format": "YYYY-MM-DD"}
     ],
     "PaymentHistory": [
-        {"key": "historyId", "label": "이력ID", "type": "number", "align": "center"},
-        {"key": "paymentKey", "label": "결제키", "type": "string"},
-        {"key": "previousStatus", "label": "이전상태", "type": "string", "align": "center"},
-        {"key": "newStatus", "label": "변경상태", "type": "string", "align": "center"},
+        {"key": "history_id", "label": "이력ID", "type": "number", "align": "center"},
+        {"key": "payment_key", "label": "결제키", "type": "string"},
+        {"key": "previous_status", "label": "이전상태", "type": "string", "align": "center"},
+        {"key": "new_status", "label": "변경상태", "type": "string", "align": "center"},
         {"key": "reason", "label": "사유", "type": "string"},
-        {"key": "processedBy", "label": "처리자", "type": "string"},
-        {"key": "createdAt", "label": "변경시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"}
+        {"key": "processed_by", "label": "처리자", "type": "string"},
+        {"key": "created_at", "label": "변경시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"}
     ],
     "Refund": [
-        {"key": "refundKey", "label": "환불키", "type": "string"},
-        {"key": "paymentKey", "label": "원결제키", "type": "string"},
+        {"key": "refund_key", "label": "환불키", "type": "string"},
+        {"key": "payment_key", "label": "원결제키", "type": "string"},
         {"key": "amount", "label": "환불금액", "type": "currency", "format": "currency:KRW", "align": "right"},
         {"key": "reason", "label": "환불사유", "type": "string"},
         {"key": "status", "label": "상태", "type": "string", "align": "center"},
-        {"key": "approvedAt", "label": "승인시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"},
-        {"key": "createdAt", "label": "요청시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"}
+        {"key": "approved_at", "label": "승인시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"},
+        {"key": "created_at", "label": "요청시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"}
     ],
     "BalanceTransaction": [
-        {"key": "transactionId", "label": "거래ID", "type": "string"},
-        {"key": "merchantId", "label": "가맹점ID", "type": "string"},
-        {"key": "sourceType", "label": "유형", "type": "string", "align": "center"},
+        {"key": "transaction_id", "label": "거래ID", "type": "string"},
+        {"key": "merchant_id", "label": "가맹점ID", "type": "string"},
+        {"key": "source_type", "label": "유형", "type": "string", "align": "center"},
         {"key": "amount", "label": "금액", "type": "currency", "format": "currency:KRW", "align": "right"},
         {"key": "fee", "label": "수수료", "type": "currency", "format": "currency:KRW", "align": "right"},
         {"key": "net", "label": "순금액", "type": "currency", "format": "currency:KRW", "align": "right"},
-        {"key": "balanceAfter", "label": "잔액", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "balance_after", "label": "잔액", "type": "currency", "format": "currency:KRW", "align": "right"},
         {"key": "status", "label": "상태", "type": "string", "align": "center"},
-        {"key": "createdAt", "label": "거래시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"}
+        {"key": "created_at", "label": "거래시간", "type": "date", "format": "YYYY-MM-DD HH:mm:ss"}
     ],
     "Settlement": [
-        {"key": "settlementId", "label": "정산ID", "type": "string"},
-        {"key": "merchantId", "label": "가맹점ID", "type": "string"},
-        {"key": "settlementDate", "label": "정산일", "type": "date", "format": "YYYY-MM-DD"},
-        {"key": "periodStart", "label": "기간시작", "type": "date", "format": "YYYY-MM-DD"},
-        {"key": "periodEnd", "label": "기간종료", "type": "date", "format": "YYYY-MM-DD"},
-        {"key": "totalPaymentAmount", "label": "총결제", "type": "currency", "format": "currency:KRW", "align": "right"},
-        {"key": "totalRefundAmount", "label": "총환불", "type": "currency", "format": "currency:KRW", "align": "right"},
-        {"key": "totalFee", "label": "수수료", "type": "currency", "format": "currency:KRW", "align": "right"},
-        {"key": "netAmount", "label": "정산금액", "type": "currency", "format": "currency:KRW", "align": "right"},
-        {"key": "paymentCount", "label": "결제건수", "type": "number", "align": "right"},
+        {"key": "settlement_id", "label": "정산ID", "type": "string"},
+        {"key": "merchant_id", "label": "가맹점ID", "type": "string"},
+        {"key": "settlement_date", "label": "정산일", "type": "date", "format": "YYYY-MM-DD"},
+        {"key": "period_start", "label": "기간시작", "type": "date", "format": "YYYY-MM-DD"},
+        {"key": "period_end", "label": "기간종료", "type": "date", "format": "YYYY-MM-DD"},
+        {"key": "total_payment_amount", "label": "총결제", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "total_refund_amount", "label": "총환불", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "total_fee", "label": "수수료", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "net_amount", "label": "정산금액", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "payment_count", "label": "결제건수", "type": "number", "align": "right"},
         {"key": "status", "label": "상태", "type": "string", "align": "center"}
     ],
     "SettlementDetail": [
-        {"key": "detailId", "label": "상세ID", "type": "string"},
-        {"key": "settlementId", "label": "정산ID", "type": "string"},
-        {"key": "paymentKey", "label": "결제키", "type": "string"},
+        {"key": "detail_id", "label": "상세ID", "type": "string"},
+        {"key": "settlement_id", "label": "정산ID", "type": "string"},
+        {"key": "payment_key", "label": "결제키", "type": "string"},
         {"key": "amount", "label": "금액", "type": "currency", "format": "currency:KRW", "align": "right"},
         {"key": "fee", "label": "수수료", "type": "currency", "format": "currency:KRW", "align": "right"},
-        {"key": "netAmount", "label": "정산금액", "type": "currency", "format": "currency:KRW", "align": "right"},
+        {"key": "net_amount", "label": "정산금액", "type": "currency", "format": "currency:KRW", "align": "right"},
         {"key": "type", "label": "유형", "type": "string", "align": "center"}
     ]
 }
