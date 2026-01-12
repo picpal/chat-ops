@@ -33,3 +33,14 @@ logs/
 # Claude
 .claude/*
 !.claude/agents/
+
+# Test outputs
+services/ui/coverage/
+
+# Work logs (local only)
+order/
+report/
+result/
+
+# Playwright MCP
+.playwright-mcp/
