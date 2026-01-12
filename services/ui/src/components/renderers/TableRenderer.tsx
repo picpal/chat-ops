@@ -15,18 +15,23 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc')
   const { open: openModal } = useModal()
 
+  // Extract table config with fallback for safety
+  const tableConfig = spec.table || { columns: [], dataRef: 'data.rows' }
+  const columns = tableConfig.columns || []
+  const dataRef = tableConfig.dataRef || 'data.rows'
+
   // Get rows from data using dataRef (JSONPath)
   const rows = useMemo(() => {
-    const extractedData = getJSONPath(data, spec.dataRef) || []
+    const extractedData = getJSONPath(data, dataRef) || []
     return Array.isArray(extractedData) ? extractedData : []
-  }, [data, spec.dataRef])
+  }, [data, dataRef])
 
   // Pagination
   const {
     hasMore,
     isLoading: isPaginationLoading,
     loadMore,
-  } = usePagination(spec.pagination?.queryToken)
+  } = usePagination(tableConfig.pagination?.queryToken)
 
   // Sort rows
   const sortedRows = useMemo(() => {
@@ -76,7 +81,7 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
   // Export CSV
   const handleExport = () => {
     const csvData = sortedRows.map((row) =>
-      spec.columns.reduce(
+      columns.reduce(
         (acc, col) => ({
           ...acc,
           [col.label]: row[col.key],
@@ -92,20 +97,25 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
     openModal('tableDetail', { spec, data, rows: sortedRows })
   }
 
+  // Check if action is enabled
+  const hasAction = (actionType: string) => {
+    return tableConfig.actions?.some((a) => a.action === actionType)
+  }
+
   // Card actions
   const actions = (
     <>
-      {spec.actions?.includes('export') && (
+      {hasAction('export-csv') && (
         <Button variant="secondary" size="sm" icon="download" onClick={handleExport}>
           Export CSV
         </Button>
       )}
-      {spec.actions?.includes('filter') && (
+      {hasAction('refresh') && (
         <button className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors">
-          <Icon name="filter_list" size="sm" />
+          <Icon name="refresh" size="sm" />
         </button>
       )}
-      {spec.actions?.includes('fullscreen') && (
+      {hasAction('fullscreen') && (
         <button
           className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
           onClick={handleFullscreen}
@@ -128,17 +138,23 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
         <table className="w-full text-left text-sm text-slate-600">
           <thead className="bg-slate-50 text-xs uppercase font-semibold text-slate-500 border-b border-slate-200">
             <tr>
-              {spec.columns.map((col) => (
+              {columns.map((col) => (
                 <th
                   key={col.key}
                   className={cn(
                     'px-6 py-3 whitespace-nowrap',
-                    col.sortable && 'cursor-pointer hover:bg-slate-100'
+                    col.sortable && 'cursor-pointer hover:bg-slate-100',
+                    col.align === 'center' && 'text-center',
+                    col.align === 'right' && 'text-right'
                   )}
                   style={{ width: col.width }}
                   onClick={() => col.sortable && handleSort(col.key)}
                 >
-                  <div className="flex items-center gap-1">
+                  <div className={cn(
+                    'flex items-center gap-1',
+                    col.align === 'center' && 'justify-center',
+                    col.align === 'right' && 'justify-end'
+                  )}>
                     {col.label}
                     {col.sortable && sortColumn === col.key && (
                       <Icon
@@ -156,7 +172,7 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
             {sortedRows.length === 0 ? (
               <tr>
                 <td
-                  colSpan={spec.columns.length}
+                  colSpan={columns.length || 1}
                   className="px-6 py-8 text-center text-slate-500"
                 >
                   No data available
@@ -165,7 +181,7 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
             ) : (
               sortedRows.map((row, idx) => (
                 <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                  {spec.columns.map((col) => (
+                  {columns.map((col) => (
                     <td
                       key={col.key}
                       className={cn(
@@ -173,6 +189,8 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
                         col.type === 'number' || col.type === 'currency'
                           ? 'text-slate-900 font-medium'
                           : '',
+                        col.align === 'center' && 'text-center',
+                        col.align === 'right' && 'text-right',
                         col.key.toLowerCase().includes('id') &&
                           'font-mono text-slate-700 text-xs'
                       )}
@@ -187,7 +205,7 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
         </table>
 
         {/* Pagination */}
-        {spec.pagination?.enabled && (hasMore || isPaginationLoading) && (
+        {tableConfig.pagination?.enabled && (hasMore || isPaginationLoading) && (
           <div className="bg-slate-50 px-6 py-3 border-t border-slate-200 flex justify-center">
             <button
               onClick={loadMore}

@@ -18,11 +18,17 @@ const LogRenderer: React.FC<LogRendererProps> = ({ spec, data }) => {
   const [showLineNumbers, setShowLineNumbers] = useState(true)
   const { open: openModal } = useModal()
 
+  // Extract log config with fallback for legacy support
+  const logConfig = spec.log || { dataRef: spec.dataRef || 'data.logs' }
+  const dataRef = logConfig.dataRef || 'data.logs'
+  const isSearchable = spec.log?.filter?.searchable ?? spec.searchable ?? false
+  const isFilterByLevel = spec.filterByLevel ?? true
+
   // Get log entries from data using dataRef
   const logs = useMemo(() => {
-    const extracted = getJSONPath(data, spec.dataRef) || []
+    const extracted = getJSONPath(data, dataRef) || []
     return Array.isArray(extracted) ? extracted : []
-  }, [data, spec.dataRef])
+  }, [data, dataRef])
 
   // Filter logs
   const filteredLogs = useMemo(() => {
@@ -110,7 +116,7 @@ const LogRenderer: React.FC<LogRendererProps> = ({ spec, data }) => {
       {/* Controls */}
       <div className="flex flex-wrap gap-4 mb-4">
         {/* Search */}
-        {spec.searchable && (
+        {isSearchable && (
           <div className="flex-1 min-w-[200px]">
             <div className="relative">
               <Icon
@@ -130,7 +136,7 @@ const LogRenderer: React.FC<LogRendererProps> = ({ spec, data }) => {
         )}
 
         {/* Level Filter */}
-        {spec.filterByLevel && (
+        {isFilterByLevel && (
           <div className="flex items-center gap-2">
             {(['all', 'error', 'warn', 'info', 'debug'] as const).map((level) => (
               <button

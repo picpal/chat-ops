@@ -10,8 +10,13 @@ interface TextRendererProps {
 }
 
 const TextRenderer: React.FC<TextRendererProps> = ({ spec }) => {
+  // Extract text config with fallback for legacy support
+  const content = spec.text?.content ?? spec.content ?? ''
+  const sections = spec.text?.sections ?? spec.sections
+  const isMarkdown = spec.text?.format === 'markdown' || spec.markdown
+
   const handleCopy = async () => {
-    await copyToClipboard(spec.content)
+    await copyToClipboard(content)
   }
 
   // Get section style based on type
@@ -63,18 +68,18 @@ const TextRenderer: React.FC<TextRendererProps> = ({ spec }) => {
       className="animate-fade-in-up"
     >
       {/* Main content */}
-      {spec.markdown ? (
+      {isMarkdown ? (
         <div className="prose prose-slate prose-sm max-w-none">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{spec.content}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
         </div>
       ) : (
-        <div className="text-slate-700 text-sm whitespace-pre-wrap">{spec.content}</div>
+        <div className="text-slate-700 text-sm whitespace-pre-wrap">{content}</div>
       )}
 
       {/* Sections */}
-      {spec.sections && spec.sections.length > 0 && (
+      {sections && sections.length > 0 && (
         <div className="mt-6 space-y-4">
-          {spec.sections.map((section, idx) => (
+          {sections.map((section, idx) => (
             <div
               key={idx}
               className={cn(
@@ -92,7 +97,7 @@ const TextRenderer: React.FC<TextRendererProps> = ({ spec }) => {
                   {section.title && (
                     <h4 className="font-semibold mb-1">{section.title}</h4>
                   )}
-                  {spec.markdown ? (
+                  {isMarkdown ? (
                     <div className="prose prose-sm max-w-none">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {section.content}

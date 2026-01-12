@@ -8,6 +8,7 @@ import {
   Pie,
   AreaChart,
   Area,
+  ComposedChart,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -15,8 +16,9 @@ import {
   Legend,
   ResponsiveContainer,
   Cell,
+  Label,
 } from 'recharts'
-import { ChartRenderSpec } from '@/types/renderSpec'
+import { ChartRenderSpec, ChartSeries } from '@/types/renderSpec'
 import { QueryResult } from '@/types/queryResult'
 import { Card, Button, Icon } from '@/components/common'
 import { useModal } from '@/hooks'
@@ -40,23 +42,44 @@ const COLORS = [
 const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
   const { open: openModal } = useModal()
 
-  // Get chart data from QueryResult using dataRef
+  // Extract chart config from nested structure
+  const chartConfig = spec.chart
+
+  // Get chart data from QueryResult using dataRef or inline data
   const chartData = useMemo(() => {
-    const extracted = getJSONPath(data, spec.dataRef) || []
+    if (spec.data) {
+      // If inline data is provided, use it directly
+      const dataRef = chartConfig.dataRef || 'rows'
+      const extracted = getJSONPath(spec.data, dataRef) || spec.data
+      return Array.isArray(extracted) ? extracted : []
+    }
+    // Otherwise get from QueryResult using dataRef
+    const dataRef = chartConfig.dataRef || 'data.rows'
+    const extracted = getJSONPath(data, dataRef) || []
     return Array.isArray(extracted) ? extracted : []
-  }, [data, spec.dataRef])
+  }, [data, spec.data, chartConfig.dataRef])
+
+  // Get primary Y axis dataKey for stats calculation
+  const primaryYAxisKey = useMemo(() => {
+    if (chartConfig.series && chartConfig.series.length > 0) {
+      return chartConfig.series[0].dataKey
+    }
+    return chartConfig.yAxis?.dataKey || 'value'
+  }, [chartConfig])
 
   // Calculate summary stats
   const stats = useMemo(() => {
     if (chartData.length === 0) return null
 
-    const values = chartData.map((d) => d[spec.yAxisKey]).filter((v) => typeof v === 'number')
+    const values = chartData.map((d) => d[primaryYAxisKey]).filter((v) => typeof v === 'number')
+    if (values.length === 0) return null
+
     const total = values.reduce((sum, v) => sum + v, 0)
     const max = Math.max(...values)
     const avg = total / values.length
 
     return { total, max, avg, count: chartData.length }
-  }, [chartData, spec.yAxisKey])
+  }, [chartData, primaryYAxisKey])
 
   const handleFullscreen = () => {
     openModal('chartDetail', { spec, data, chartData, stats })
@@ -76,108 +99,245 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
     </>
   )
 
+  // Get series color with fallback
+  const getSeriesColor = (series: ChartSeries, index: number): string => {
+    return series.color || COLORS[index % COLORS.length]
+  }
+
+  // Render series element based on type
+  const renderSeriesElement = (series: ChartSeries, index: number, defaultType: 'bar' | 'line' | 'area') => {
+    const color = getSeriesColor(series, index)
+    const seriesType = series.type || defaultType
+
+    switch (seriesType) {
+      case 'bar':
+        return (
+          <Bar
+            key={series.dataKey}
+            dataKey={series.dataKey}
+            name={series.name || series.dataKey}
+            fill={color}
+            radius={[4, 4, 0, 0]}
+          />
+        )
+      case 'line':
+        return (
+          <Line
+            key={series.dataKey}
+            type="monotone"
+            dataKey={series.dataKey}
+            name={series.name || series.dataKey}
+            stroke={color}
+            strokeWidth={2}
+            dot={{ fill: color, strokeWidth: 2 }}
+            activeDot={{ r: 6 }}
+          />
+        )
+      case 'area':
+        return (
+          <Area
+            key={series.dataKey}
+            type="monotone"
+            dataKey={series.dataKey}
+            name={series.name || series.dataKey}
+            stroke={color}
+            strokeWidth={2}
+            fillOpacity={0.3}
+            fill={color}
+          />
+        )
+      default:
+        return null
+    }
+  }
+
   // Render appropriate chart type
   const renderChart = () => {
-    const colors = spec.config?.colors || COLORS
-    const showGrid = spec.config?.showGrid ?? true
-    const showLegend = spec.config?.showLegend ?? false
+    const { xAxis, yAxis, series, legend, tooltip, chartType } = chartConfig
+    const showLegend = legend ?? (series && series.length > 1)
+    const showTooltip = tooltip ?? true
+    const xAxisDataKey = xAxis?.dataKey || 'name'
 
     const commonProps = {
       data: chartData,
-      margin: { top: 10, right: 30, left: 0, bottom: 0 },
+      margin: { top: 20, right: 30, left: 20, bottom: xAxis?.label ? 40 : 20 },
     }
 
-    switch (spec.chartType) {
+    const tooltipStyle = {
+      contentStyle: {
+        backgroundColor: '#fff',
+        border: '1px solid #e2e8f0',
+        borderRadius: '8px',
+        boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
+      },
+    }
+
+    // Common X/Y Axis components with labels
+    const renderXAxis = () => (
+      <XAxis dataKey={xAxisDataKey} tick={{ fontSize: 12 }} stroke="#94a3b8">
+        {xAxis?.label && (
+          <Label value={xAxis.label} offset={-10} position="insideBottom" style={{ fontSize: 12, fill: '#64748b' }} />
+        )}
+      </XAxis>
+    )
+
+    const renderYAxis = () => (
+      <YAxis tick={{ fontSize: 12 }} stroke="#94a3b8">
+        {yAxis?.label && (
+          <Label value={yAxis.label} angle={-90} position="insideLeft" style={{ fontSize: 12, fill: '#64748b', textAnchor: 'middle' }} />
+        )}
+      </YAxis>
+    )
+
+    // If we have multiple series or composed type, use ComposedChart
+    const hasMultipleSeries = series && series.length > 1
+    const useComposedChart = chartType === 'composed' || (hasMultipleSeries && series.some(s => s.type && s.type !== chartType))
+
+    if (useComposedChart && series) {
+      return (
+        <ComposedChart {...commonProps}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+          {renderXAxis()}
+          {renderYAxis()}
+          {showTooltip && <Tooltip {...tooltipStyle} />}
+          {showLegend && <Legend />}
+          {series.map((s, index) => renderSeriesElement(s, index, 'bar'))}
+        </ComposedChart>
+      )
+    }
+
+    switch (chartType) {
       case 'bar':
         return (
           <BarChart {...commonProps}>
-            {showGrid && <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />}
-            <XAxis dataKey={spec.xAxisKey} tick={{ fontSize: 12 }} stroke="#94a3b8" />
-            <YAxis tick={{ fontSize: 12 }} stroke="#94a3b8" />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: '#fff',
-                border: '1px solid #e2e8f0',
-                borderRadius: '8px',
-                boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
-              }}
-            />
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            {renderXAxis()}
+            {renderYAxis()}
+            {showTooltip && <Tooltip {...tooltipStyle} />}
             {showLegend && <Legend />}
-            <Bar dataKey={spec.yAxisKey} fill={colors[0]} radius={[4, 4, 0, 0]}>
-              {chartData.map((_, index) => (
-                <Cell
-                  key={`cell-${index}`}
-                  fill={colors[index % colors.length]}
-                  opacity={0.8 + (index % 3) * 0.1}
+            {series && series.length > 0 ? (
+              series.map((s, index) => (
+                <Bar
+                  key={s.dataKey}
+                  dataKey={s.dataKey}
+                  name={s.name || s.dataKey}
+                  fill={getSeriesColor(s, index)}
+                  radius={[4, 4, 0, 0]}
                 />
-              ))}
-            </Bar>
+              ))
+            ) : (
+              <Bar
+                dataKey={yAxis?.dataKey || 'value'}
+                fill={COLORS[0]}
+                radius={[4, 4, 0, 0]}
+              >
+                {chartData.map((_, index) => (
+                  <Cell
+                    key={`cell-${index}`}
+                    fill={COLORS[index % COLORS.length]}
+                    opacity={0.8 + (index % 3) * 0.1}
+                  />
+                ))}
+              </Bar>
+            )}
           </BarChart>
         )
 
       case 'line':
         return (
           <LineChart {...commonProps}>
-            {showGrid && <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />}
-            <XAxis dataKey={spec.xAxisKey} tick={{ fontSize: 12 }} stroke="#94a3b8" />
-            <YAxis tick={{ fontSize: 12 }} stroke="#94a3b8" />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: '#fff',
-                border: '1px solid #e2e8f0',
-                borderRadius: '8px',
-              }}
-            />
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            {renderXAxis()}
+            {renderYAxis()}
+            {showTooltip && <Tooltip {...tooltipStyle} />}
             {showLegend && <Legend />}
-            <Line
-              type="monotone"
-              dataKey={spec.yAxisKey}
-              stroke={colors[0]}
-              strokeWidth={2}
-              dot={{ fill: colors[0], strokeWidth: 2 }}
-              activeDot={{ r: 6 }}
-            />
+            {series && series.length > 0 ? (
+              series.map((s, index) => (
+                <Line
+                  key={s.dataKey}
+                  type="monotone"
+                  dataKey={s.dataKey}
+                  name={s.name || s.dataKey}
+                  stroke={getSeriesColor(s, index)}
+                  strokeWidth={2}
+                  dot={{ fill: getSeriesColor(s, index), strokeWidth: 2 }}
+                  activeDot={{ r: 6 }}
+                />
+              ))
+            ) : (
+              <Line
+                type="monotone"
+                dataKey={yAxis?.dataKey || 'value'}
+                stroke={COLORS[0]}
+                strokeWidth={2}
+                dot={{ fill: COLORS[0], strokeWidth: 2 }}
+                activeDot={{ r: 6 }}
+              />
+            )}
           </LineChart>
         )
 
       case 'area':
         return (
           <AreaChart {...commonProps}>
-            {showGrid && <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />}
-            <XAxis dataKey={spec.xAxisKey} tick={{ fontSize: 12 }} stroke="#94a3b8" />
-            <YAxis tick={{ fontSize: 12 }} stroke="#94a3b8" />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: '#fff',
-                border: '1px solid #e2e8f0',
-                borderRadius: '8px',
-              }}
-            />
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            {renderXAxis()}
+            {renderYAxis()}
+            {showTooltip && <Tooltip {...tooltipStyle} />}
             {showLegend && <Legend />}
-            <defs>
-              <linearGradient id="colorGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={colors[0]} stopOpacity={0.3} />
-                <stop offset="95%" stopColor={colors[0]} stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <Area
-              type="monotone"
-              dataKey={spec.yAxisKey}
-              stroke={colors[0]}
-              strokeWidth={2}
-              fillOpacity={1}
-              fill="url(#colorGradient)"
-            />
+            {series && series.length > 0 ? (
+              series.map((s, index) => {
+                const color = getSeriesColor(s, index)
+                const gradientId = `colorGradient-${s.dataKey}`
+                return (
+                  <React.Fragment key={s.dataKey}>
+                    <defs>
+                      <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={color} stopOpacity={0.3} />
+                        <stop offset="95%" stopColor={color} stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <Area
+                      type="monotone"
+                      dataKey={s.dataKey}
+                      name={s.name || s.dataKey}
+                      stroke={color}
+                      strokeWidth={2}
+                      fillOpacity={1}
+                      fill={`url(#${gradientId})`}
+                    />
+                  </React.Fragment>
+                )
+              })
+            ) : (
+              <>
+                <defs>
+                  <linearGradient id="colorGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={COLORS[0]} stopOpacity={0.3} />
+                    <stop offset="95%" stopColor={COLORS[0]} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <Area
+                  type="monotone"
+                  dataKey={yAxis?.dataKey || 'value'}
+                  stroke={COLORS[0]}
+                  strokeWidth={2}
+                  fillOpacity={1}
+                  fill="url(#colorGradient)"
+                />
+              </>
+            )}
           </AreaChart>
         )
 
       case 'pie':
+        const pieDataKey = series?.[0]?.dataKey || yAxis?.dataKey || 'value'
         return (
           <PieChart>
             <Pie
               data={chartData}
-              dataKey={spec.yAxisKey}
-              nameKey={spec.xAxisKey}
+              dataKey={pieDataKey}
+              nameKey={xAxisDataKey}
               cx="50%"
               cy="50%"
               outerRadius={100}
@@ -185,16 +345,10 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
               labelLine={false}
             >
               {chartData.map((_, index) => (
-                <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />
+                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
               ))}
             </Pie>
-            <Tooltip
-              contentStyle={{
-                backgroundColor: '#fff',
-                border: '1px solid #e2e8f0',
-                borderRadius: '8px',
-              }}
-            />
+            {showTooltip && <Tooltip {...tooltipStyle} />}
             {showLegend && <Legend />}
           </PieChart>
         )
@@ -202,17 +356,31 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
       default:
         return (
           <div className="flex items-center justify-center h-full text-slate-500">
-            Unsupported chart type: {spec.chartType}
+            Unsupported chart type: {chartType}
           </div>
         )
     }
   }
 
+  // Get chart icon based on chart type
+  const getChartIcon = () => {
+    switch (chartConfig.chartType) {
+      case 'pie':
+        return 'pie_chart'
+      case 'bar':
+        return 'bar_chart'
+      case 'area':
+        return 'area_chart'
+      default:
+        return 'show_chart'
+    }
+  }
+
   return (
     <Card
-      title={spec.title || spec.config?.title}
+      title={spec.title}
       subtitle={spec.description}
-      icon={spec.chartType === 'pie' ? 'pie_chart' : spec.chartType === 'bar' ? 'bar_chart' : 'show_chart'}
+      icon={getChartIcon()}
       actions={actions}
       className="animate-fade-in-up"
     >

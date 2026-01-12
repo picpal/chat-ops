@@ -78,21 +78,30 @@ describe('ChartRenderer', () => {
   })
 
   it('renders bar chart icon for bar chart type', () => {
-    const barSpec: ChartRenderSpec = { ...chartSpec, chartType: 'bar' }
+    const barSpec: ChartRenderSpec = {
+      ...chartSpec,
+      chart: { ...chartSpec.chart, chartType: 'bar' }
+    }
     render(<ChartRenderer spec={barSpec} data={mockChartResult} />)
 
     expect(screen.getByText('bar_chart')).toBeInTheDocument()
   })
 
   it('renders line chart icon for line chart type', () => {
-    const lineSpec: ChartRenderSpec = { ...chartSpec, chartType: 'line' }
+    const lineSpec: ChartRenderSpec = {
+      ...chartSpec,
+      chart: { ...chartSpec.chart, chartType: 'line' }
+    }
     render(<ChartRenderer spec={lineSpec} data={mockChartResult} />)
 
     expect(screen.getByText('show_chart')).toBeInTheDocument()
   })
 
   it('renders pie chart icon for pie chart type', () => {
-    const pieSpec: ChartRenderSpec = { ...chartSpec, chartType: 'pie' }
+    const pieSpec: ChartRenderSpec = {
+      ...chartSpec,
+      chart: { ...chartSpec.chart, chartType: 'pie' }
+    }
     render(<ChartRenderer spec={pieSpec} data={mockChartResult} />)
 
     expect(screen.getByText('pie_chart')).toBeInTheDocument()
