@@ -281,6 +281,14 @@ public class QueryPlanValidatorService {
 
         if (chatOpsProperties.isTimeRangeRequired(entity)) {
             Map<String, Object> timeRange = (Map<String, Object>) queryPlan.get("timeRange");
+            Object limitObj = queryPlan.get("limit");
+
+            // limit이 있으면 timeRange 없이도 허용 (ORDER BY + LIMIT으로 최신 N건 조회 가능)
+            if (timeRange == null && limitObj != null) {
+                log.debug("Skipping timeRange validation for entity {} because limit is specified", entity);
+                return;
+            }
+
             if (timeRange == null) {
                 throw new QueryPlanValidationException(
                         "TIME_RANGE_REQUIRED",

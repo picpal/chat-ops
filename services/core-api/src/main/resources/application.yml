@@ -53,49 +53,6 @@ chatops:
         updatedAt: updated_at
       default-order-by: order_date DESC
 
-    Customer:
-      table: customers
-      fields:
-        customerId: customer_id
-        name: name
-        email: email
-        phone: phone
-        createdAt: created_at
-      default-order-by: created_at DESC
-
-    Product:
-      table: products
-      fields:
-        productId: product_id
-        name: name
-        description: description
-        price: price
-        category: category
-        createdAt: created_at
-      default-order-by: created_at DESC
-
-    Inventory:
-      table: inventory
-      fields:
-        inventoryId: inventory_id
-        productId: product_id
-        quantity: quantity
-        warehouse: warehouse
-        updatedAt: updated_at
-      default-order-by: updated_at DESC
-
-    PaymentLog:
-      table: payment_logs
-      fields:
-        logId: log_id
-        orderId: order_id
-        timestamp: timestamp
-        level: level
-        message: message
-        errorCode: error_code
-      default-order-by: timestamp DESC
-      time-range-required: true
-
     # PG 결제 도메인 엔티티 매핑
     Merchant:
       table: merchants
