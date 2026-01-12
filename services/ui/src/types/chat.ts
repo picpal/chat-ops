@@ -1,5 +1,6 @@
 import { RenderSpec } from './renderSpec'
 import { QueryResult } from './queryResult'
+import { QueryPlan } from './queryPlan'
 
 export interface ChatRequest {
   message: string
@@ -11,6 +12,7 @@ export interface ChatResponse {
   requestId: string
   renderSpec: RenderSpec
   queryResult: QueryResult
+  queryPlan: QueryPlan  // 이번 쿼리 조건 (후속 질문용)
   aiMessage?: string
   timestamp: string
 }
@@ -24,6 +26,7 @@ export interface ChatMessage {
   content: string
   renderSpec?: RenderSpec
   queryResult?: QueryResult
+  queryPlan?: QueryPlan  // 이번 쿼리 조건 (후속 질문용)
   timestamp: string
   status?: MessageStatus
 }

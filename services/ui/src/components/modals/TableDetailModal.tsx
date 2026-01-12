@@ -19,6 +19,10 @@ const TableDetailModal: React.FC = () => {
   const spec = modalData?.spec
   const rows = modalData?.rows || []
 
+  // Extract table config with fallback
+  const tableConfig = spec?.table || { columns: [], dataRef: 'data.rows' }
+  const columns = tableConfig.columns || []
+
   // Pagination
   const totalPages = Math.ceil(rows.length / ROWS_PER_PAGE)
   const paginatedRows = useMemo(() => {
@@ -141,12 +145,14 @@ const TableDetailModal: React.FC = () => {
           <table className="w-full text-left text-sm text-slate-600">
             <thead className="bg-slate-50 text-xs uppercase font-bold text-slate-500 border-b border-slate-200 sticky top-0 z-10 shadow-sm">
               <tr>
-                {spec.columns.map((col) => (
+                {columns.map((col) => (
                   <th
                     key={col.key}
                     className={cn(
                       'px-8 py-4 whitespace-nowrap bg-slate-50',
                       col.type === 'currency' || col.type === 'number' ? 'text-right' : '',
+                      col.align === 'center' && 'text-center',
+                      col.align === 'right' && 'text-right',
                       col.type === 'status' ? 'text-center' : ''
                     )}
                   >
@@ -159,7 +165,7 @@ const TableDetailModal: React.FC = () => {
               {paginatedRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={spec.columns.length}
+                    colSpan={columns.length || 1}
                     className="px-8 py-12 text-center text-slate-500"
                   >
                     No data available
@@ -171,7 +177,7 @@ const TableDetailModal: React.FC = () => {
                     key={idx}
                     className="hover:bg-blue-50/30 transition-colors group"
                   >
-                    {spec.columns.map((col) => (
+                    {columns.map((col) => (
                       <td
                         key={col.key}
                         className={cn(
@@ -179,6 +185,8 @@ const TableDetailModal: React.FC = () => {
                           col.type === 'currency' || col.type === 'number'
                             ? 'text-slate-900 font-bold text-right'
                             : '',
+                          col.align === 'center' && 'text-center',
+                          col.align === 'right' && 'text-right',
                           col.type === 'status' ? 'text-center' : '',
                           col.key.toLowerCase().includes('id') &&
                             'font-mono text-slate-700 text-xs'

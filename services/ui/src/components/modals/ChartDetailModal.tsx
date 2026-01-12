@@ -15,10 +15,11 @@ import {
   Legend,
   ResponsiveContainer,
   Cell,
+  Label,
 } from 'recharts'
 import { useModal } from '@/hooks'
 import { Icon } from '@/components/common'
-import { ChartRenderSpec } from '@/types/renderSpec'
+import { ChartRenderSpec, ChartSeries } from '@/types/renderSpec'
 import { formatNumber } from '@/utils'
 
 // Default color palette matching design system
@@ -68,41 +69,86 @@ const ChartDetailModal: React.FC = () => {
 
   if (!isOpen || type !== 'chartDetail' || !spec) return null
 
-  const colors = spec.config?.colors || COLORS
+  // Extract chart config from nested structure
+  const chartConfig = spec.chart
+  const { xAxis, yAxis, series, chartType } = chartConfig
+  const xAxisDataKey = xAxis?.dataKey || 'name'
+
+  // Get series color with fallback
+  const getSeriesColor = (s: ChartSeries, index: number): string => {
+    return s.color || COLORS[index % COLORS.length]
+  }
+
+  // Get primary Y axis key for display
+  const primaryYAxisKey = series?.[0]?.dataKey || yAxis?.dataKey || 'value'
+  const primaryYAxisName = series?.[0]?.name || primaryYAxisKey
 
   // Render chart based on type
   const renderChart = () => {
+    const showLegend = chartConfig.legend ?? (series && series.length > 1)
+
     const commonProps = {
       data: chartData,
-      margin: { top: 20, right: 30, left: 20, bottom: 20 },
+      margin: { top: 20, right: 30, left: 20, bottom: xAxis?.label ? 40 : 20 },
     }
 
-    switch (spec.chartType) {
+    const tooltipStyle = {
+      contentStyle: {
+        backgroundColor: '#0f172a',
+        border: 'none',
+        borderRadius: '8px',
+        color: '#fff',
+        fontSize: '12px',
+      },
+    }
+
+    // Common X/Y Axis components with labels
+    const renderXAxisComponent = () => (
+      <XAxis dataKey={xAxisDataKey} tick={{ fontSize: 12 }} stroke="#94a3b8">
+        {xAxis?.label && (
+          <Label value={xAxis.label} offset={-10} position="insideBottom" style={{ fontSize: 12, fill: '#64748b' }} />
+        )}
+      </XAxis>
+    )
+
+    const renderYAxisComponent = () => (
+      <YAxis tick={{ fontSize: 12 }} stroke="#94a3b8">
+        {yAxis?.label && (
+          <Label value={yAxis.label} angle={-90} position="insideLeft" style={{ fontSize: 12, fill: '#64748b', textAnchor: 'middle' }} />
+        )}
+      </YAxis>
+    )
+
+    switch (chartType) {
       case 'bar':
         return (
           <BarChart {...commonProps}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-            <XAxis dataKey={spec.xAxisKey} tick={{ fontSize: 12 }} stroke="#94a3b8" />
-            <YAxis tick={{ fontSize: 12 }} stroke="#94a3b8" />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: '#0f172a',
-                border: 'none',
-                borderRadius: '8px',
-                color: '#fff',
-                fontSize: '12px',
-              }}
-            />
-            <Legend />
-            <Bar dataKey={spec.yAxisKey} fill={colors[0]} radius={[4, 4, 0, 0]}>
-              {chartData.map((_, index) => (
-                <Cell
-                  key={`cell-${index}`}
-                  fill={colors[index % colors.length]}
-                  opacity={0.9}
+            {renderXAxisComponent()}
+            {renderYAxisComponent()}
+            <Tooltip {...tooltipStyle} />
+            {showLegend && <Legend />}
+            {series && series.length > 0 ? (
+              series.map((s, index) => (
+                <Bar
+                  key={s.dataKey}
+                  dataKey={s.dataKey}
+                  name={s.name || s.dataKey}
+                  fill={getSeriesColor(s, index)}
+                  radius={[4, 4, 0, 0]}
                 />
-              ))}
-            </Bar>
+              ))
+            ) : (
+              <Bar dataKey={primaryYAxisKey} fill={COLORS[0]} radius={[4, 4, 0, 0]}>
+                {chartData.map((_, index) => (
+                  <Cell
+                    key={`cell-${index}`}
+                    fill={COLORS[index % COLORS.length]}
+                    opacity={0.9}
+                  />
+                ))}
+              </Bar>
+            )}
           </BarChart>
         )
 
@@ -110,25 +156,33 @@ const ChartDetailModal: React.FC = () => {
         return (
           <LineChart {...commonProps}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-            <XAxis dataKey={spec.xAxisKey} tick={{ fontSize: 12 }} stroke="#94a3b8" />
-            <YAxis tick={{ fontSize: 12 }} stroke="#94a3b8" />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: '#0f172a',
-                border: 'none',
-                borderRadius: '8px',
-                color: '#fff',
-              }}
-            />
-            <Legend />
-            <Line
-              type="monotone"
-              dataKey={spec.yAxisKey}
-              stroke={colors[0]}
-              strokeWidth={3}
-              dot={{ fill: '#fff', stroke: colors[0], strokeWidth: 2, r: 4 }}
-              activeDot={{ r: 6, fill: colors[0] }}
-            />
+            {renderXAxisComponent()}
+            {renderYAxisComponent()}
+            <Tooltip {...tooltipStyle} />
+            {showLegend && <Legend />}
+            {series && series.length > 0 ? (
+              series.map((s, index) => (
+                <Line
+                  key={s.dataKey}
+                  type="monotone"
+                  dataKey={s.dataKey}
+                  name={s.name || s.dataKey}
+                  stroke={getSeriesColor(s, index)}
+                  strokeWidth={3}
+                  dot={{ fill: '#fff', stroke: getSeriesColor(s, index), strokeWidth: 2, r: 4 }}
+                  activeDot={{ r: 6, fill: getSeriesColor(s, index) }}
+                />
+              ))
+            ) : (
+              <Line
+                type="monotone"
+                dataKey={primaryYAxisKey}
+                stroke={COLORS[0]}
+                strokeWidth={3}
+                dot={{ fill: '#fff', stroke: COLORS[0], strokeWidth: 2, r: 4 }}
+                activeDot={{ r: 6, fill: COLORS[0] }}
+              />
+            )}
           </LineChart>
         )
 
@@ -136,59 +190,74 @@ const ChartDetailModal: React.FC = () => {
         return (
           <AreaChart {...commonProps}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-            <XAxis dataKey={spec.xAxisKey} tick={{ fontSize: 12 }} stroke="#94a3b8" />
-            <YAxis tick={{ fontSize: 12 }} stroke="#94a3b8" />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: '#0f172a',
-                border: 'none',
-                borderRadius: '8px',
-                color: '#fff',
-              }}
-            />
-            <Legend />
-            <defs>
-              <linearGradient id="colorGradientModal" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={colors[0]} stopOpacity={0.3} />
-                <stop offset="95%" stopColor={colors[0]} stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <Area
-              type="monotone"
-              dataKey={spec.yAxisKey}
-              stroke={colors[0]}
-              strokeWidth={3}
-              fillOpacity={1}
-              fill="url(#colorGradientModal)"
-            />
+            {renderXAxisComponent()}
+            {renderYAxisComponent()}
+            <Tooltip {...tooltipStyle} />
+            {showLegend && <Legend />}
+            {series && series.length > 0 ? (
+              series.map((s, index) => {
+                const color = getSeriesColor(s, index)
+                const gradientId = `colorGradientModal-${s.dataKey}`
+                return (
+                  <React.Fragment key={s.dataKey}>
+                    <defs>
+                      <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={color} stopOpacity={0.3} />
+                        <stop offset="95%" stopColor={color} stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <Area
+                      type="monotone"
+                      dataKey={s.dataKey}
+                      name={s.name || s.dataKey}
+                      stroke={color}
+                      strokeWidth={3}
+                      fillOpacity={1}
+                      fill={`url(#${gradientId})`}
+                    />
+                  </React.Fragment>
+                )
+              })
+            ) : (
+              <>
+                <defs>
+                  <linearGradient id="colorGradientModal" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={COLORS[0]} stopOpacity={0.3} />
+                    <stop offset="95%" stopColor={COLORS[0]} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <Area
+                  type="monotone"
+                  dataKey={primaryYAxisKey}
+                  stroke={COLORS[0]}
+                  strokeWidth={3}
+                  fillOpacity={1}
+                  fill="url(#colorGradientModal)"
+                />
+              </>
+            )}
           </AreaChart>
         )
 
       case 'pie':
+        const pieDataKey = series?.[0]?.dataKey || yAxis?.dataKey || 'value'
         return (
           <PieChart>
             <Pie
               data={chartData}
-              dataKey={spec.yAxisKey}
-              nameKey={spec.xAxisKey}
+              dataKey={pieDataKey}
+              nameKey={xAxisDataKey}
               cx="50%"
               cy="50%"
               outerRadius={150}
               label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
             >
               {chartData.map((_, index) => (
-                <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />
+                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
               ))}
             </Pie>
-            <Tooltip
-              contentStyle={{
-                backgroundColor: '#0f172a',
-                border: 'none',
-                borderRadius: '8px',
-                color: '#fff',
-              }}
-            />
-            <Legend />
+            <Tooltip {...tooltipStyle} />
+            {showLegend && <Legend />}
           </PieChart>
         )
 
@@ -218,7 +287,7 @@ const ChartDetailModal: React.FC = () => {
               {spec.title || 'Maximized Chart View'}
             </h2>
             <p className="text-sm text-slate-500 mt-1">
-              {spec.description || `${spec.chartType} chart visualization`}
+              {spec.description || `${chartType} chart visualization`}
             </p>
           </div>
           <div className="flex items-center gap-4">
@@ -275,15 +344,29 @@ const ChartDetailModal: React.FC = () => {
                   </div>
                   {/* Legend Indicators */}
                   <div className="flex gap-4">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="w-3 h-0.5"
-                        style={{ backgroundColor: colors[0] }}
-                      />
-                      <span className="text-xs font-medium text-slate-600">
-                        {spec.yAxisKey}
-                      </span>
-                    </div>
+                    {series && series.length > 0 ? (
+                      series.map((s, index) => (
+                        <div key={s.dataKey} className="flex items-center gap-2">
+                          <span
+                            className="w-3 h-0.5"
+                            style={{ backgroundColor: getSeriesColor(s, index) }}
+                          />
+                          <span className="text-xs font-medium text-slate-600">
+                            {s.name || s.dataKey}
+                          </span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="w-3 h-0.5"
+                          style={{ backgroundColor: COLORS[0] }}
+                        />
+                        <span className="text-xs font-medium text-slate-600">
+                          {primaryYAxisName}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -382,7 +465,7 @@ const ChartDetailModal: React.FC = () => {
                       Query Result
                     </p>
                     <p className="text-xs text-slate-500">
-                      {spec.dataRef || 'data.rows'}
+                      {chartConfig.dataRef || 'data.rows'}
                     </p>
                   </div>
                 </div>

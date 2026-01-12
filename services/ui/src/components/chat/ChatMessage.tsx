@@ -50,11 +50,16 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
       </div>
 
       {/* Rendered Result */}
-      {message.renderSpec && message.queryResult && (
+      {message.renderSpec && (message.queryResult || message.renderSpec.type === 'clarification' || message.renderSpec.type === 'text') && (
         <div className="w-full">
           <RenderSpecDispatcher
             renderSpec={message.renderSpec}
-            queryResult={message.queryResult}
+            queryResult={message.queryResult || {
+              requestId: '',
+              status: 'success',
+              data: { rows: [] },
+              metadata: { executionTimeMs: 0, rowsReturned: 0 }
+            }}
           />
         </div>
       )}

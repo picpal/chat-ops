@@ -90,16 +90,21 @@ const tableSpec: TableRenderSpec = {
   requestId: 'req-table-001',
   title: 'Recent Transactions',
   description: 'PG, Payment, Settlement & Purchase Logs',
-  dataRef: '$.data.rows',
-  columns: [
-    { key: 'id', label: 'Transaction ID', type: 'string', sortable: true },
-    { key: 'date', label: 'Date', type: 'date', sortable: true },
-    { key: 'amount', label: 'Amount', type: 'currency', sortable: true },
-    { key: 'status', label: 'Status', type: 'status' },
-    { key: 'merchant', label: 'Merchant', type: 'string' },
-  ],
-  actions: ['export', 'filter', 'fullscreen'],
-  pagination: { enabled: true },
+  table: {
+    dataRef: 'data.rows',
+    columns: [
+      { key: 'id', label: 'Transaction ID', type: 'string', sortable: true },
+      { key: 'date', label: 'Date', type: 'date', sortable: true },
+      { key: 'amount', label: 'Amount', type: 'currency', sortable: true, align: 'right' },
+      { key: 'status', label: 'Status', type: 'status' },
+      { key: 'merchant', label: 'Merchant', type: 'string' },
+    ],
+    actions: [
+      { label: 'Export CSV', action: 'export-csv', icon: 'download' },
+      { label: 'Fullscreen', action: 'fullscreen', icon: 'fullscreen' },
+    ],
+    pagination: { enabled: true },
+  },
 }
 
 // Chart RenderSpec
@@ -107,14 +112,17 @@ const chartSpec: ChartRenderSpec = {
   type: 'chart',
   requestId: 'req-chart-001',
   title: 'Transaction Volume Trends',
-  description: 'Last 7 Days • Data updated 2m ago',
-  chartType: 'area',
-  dataRef: '$.data.rows',
-  xAxisKey: 'name',
-  yAxisKey: 'value',
-  config: {
-    showGrid: true,
-    showLegend: true,
+  description: 'Last 7 Days - Data updated 2m ago',
+  chart: {
+    chartType: 'area',
+    dataRef: '$.data.rows',
+    xAxis: { dataKey: 'name', label: 'Date', type: 'category' },
+    yAxis: { dataKey: 'value', label: 'Volume', type: 'number' },
+    series: [
+      { dataKey: 'value', name: 'Transaction Volume', type: 'area' }
+    ],
+    legend: true,
+    tooltip: true,
   },
 }
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import { Icon } from '@/components/common'
 import { useChat } from '@/hooks'
 import { useChatStore } from '@/store'
@@ -7,8 +7,27 @@ import { ICONS } from '@/utils'
 const ChatPanel: React.FC = () => {
   const [message, setMessage] = useState('')
   const [isFocused, setIsFocused] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const { sendMessage, isLoading } = useChat()
   const { currentSessionId, sessions } = useChatStore()
+
+  // Auto-focus textarea when a new session is created or session changes
+  useEffect(() => {
+    if (currentSessionId && textareaRef.current) {
+      // Small delay to ensure modal is fully closed and DOM is ready
+      const timer = setTimeout(() => {
+        textareaRef.current?.focus()
+      }, 100)
+      return () => clearTimeout(timer)
+    }
+  }, [currentSessionId])
+
+  // Re-focus textarea when response is complete (isLoading: true -> false)
+  useEffect(() => {
+    if (!isLoading && textareaRef.current) {
+      textareaRef.current.focus()
+    }
+  }, [isLoading])
 
   const currentSession = sessions.find((s) => s.id === currentSessionId)
   const hasMessages = currentSession && currentSession.messages.length > 0
@@ -21,9 +40,25 @@ const ChatPanel: React.FC = () => {
   const handleSend = () => {
     if (!message.trim() || !currentSessionId) return
 
+    const history = currentSession?.messages.slice(-10) || []
+
+    // Debug: conversationHistory 로깅
+    console.log('[ChatPanel] Sending with conversationHistory:', {
+      messageCount: history.length,
+      messages: history.map((m, i) => ({
+        index: i,
+        role: m.role,
+        hasQueryResult: !!m.queryResult,
+        queryResultKeys: m.queryResult ? Object.keys(m.queryResult) : null,
+        hasRows: !!m.queryResult?.data?.rows,
+        rowsCount: m.queryResult?.data?.rows?.length,
+      })),
+    })
+
     sendMessage({
       message: message.trim(),
       sessionId: currentSessionId,
+      conversationHistory: history,
     })
 
     setMessage('')
@@ -79,6 +114,7 @@ const ChatPanel: React.FC = () => {
           </button>
 
           <textarea
+            ref={textareaRef}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             onKeyPress={handleKeyPress}
