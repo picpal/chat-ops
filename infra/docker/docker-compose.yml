@@ -93,6 +93,8 @@ services:
       - CORE_API_URL=http://core-api:8080
       - DATABASE_URL=postgresql://${POSTGRES_USER:-chatops_user}:${POSTGRES_PASSWORD:-chatops_pass}@postgres:5432/${POSTGRES_DB:-chatops}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+      - CLARIFICATION_MODEL=${CLARIFICATION_MODEL:-gpt-4o}
       - RAG_ENABLED=${RAG_ENABLED:-true}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     ports:

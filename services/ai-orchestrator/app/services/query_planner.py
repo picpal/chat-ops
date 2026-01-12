@@ -18,16 +18,43 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================
+# Operator Normalization (LLM 오류 방어)
+# ============================================
+
+OPERATOR_ALIASES = {
+    ">=": "gte",
+    ">": "gt",
+    "<=": "lte",
+    "<": "lt",
+    "=": "eq",
+    "==": "eq",
+    "!=": "ne",
+    "<>": "ne",
+    "LIKE": "like",
+    "IN": "in",
+    "BETWEEN": "between",
+}
+
+
+def normalize_operator(operator: str) -> str:
+    """
+    잘못된 operator를 정규화
+    LLM이 '>=' 같은 기호를 반환할 경우 'gte'로 변환
+    """
+    if operator in OPERATOR_ALIASES:
+        normalized = OPERATOR_ALIASES[operator]
+        logger.warning(f"Operator normalized: '{operator}' -> '{normalized}'")
+        return normalized
+    return operator.lower() if operator else operator
+
+
+# ============================================
 # Pydantic Models for Structured Output
 # ============================================
 
 class EntityType(str, Enum):
     # 기존 e-commerce 엔티티
     ORDER = "Order"
-    CUSTOMER = "Customer"
-    PRODUCT = "Product"
-    INVENTORY = "Inventory"
-    PAYMENT_LOG = "PaymentLog"
     # PG 결제 도메인 엔티티
     MERCHANT = "Merchant"
     PG_CUSTOMER = "PgCustomer"
@@ -44,6 +71,15 @@ class OperationType(str, Enum):
     LIST = "list"
     AGGREGATE = "aggregate"
     SEARCH = "search"
+
+
+class QueryIntent(str, Enum):
+    """사용자 질문의 의도"""
+    NEW_QUERY = "new_query"              # 새로운 검색 (이전 컨텍스트 무시)
+    REFINE_PREVIOUS = "refine_previous"  # 서버 재조회 (조건 변경)
+    FILTER_LOCAL = "filter_local"        # 클라이언트에서 이전 결과 필터링
+    AGGREGATE_LOCAL = "aggregate_local"  # 클라이언트에서 이전 결과 집계
+    DIRECT_ANSWER = "direct_answer"      # LLM이 직접 답변 (DB 조회 없이)
 
 
 class FilterOperator(str, Enum):
@@ -68,6 +104,8 @@ class Aggregation(BaseModel):
     function: str = Field(description="집계 함수: count, sum, avg, min, max")
     field: str = Field(description="집계 대상 필드 (* 가능)")
     alias: Optional[str] = Field(default=None, description="결과 별칭")
+    displayLabel: Optional[str] = Field(default=None, description="사용자에게 표시할 한글 레이블 (예: '결제 금액 합계')")
+    currency: Optional[str] = Field(default=None, description="화폐 단위: KRW, USD, null(화폐 아님)")
 
 
 class OrderBy(BaseModel):
@@ -82,14 +120,33 @@ class TimeRange(BaseModel):
 
 class QueryPlan(BaseModel):
     """AI가 생성하는 QueryPlan 구조"""
-    entity: EntityType = Field(description="조회할 엔티티")
-    operation: OperationType = Field(description="작업 유형")
+    entity: Optional[EntityType] = Field(default=None, description="조회할 엔티티")
+    operation: OperationType = Field(default="list", description="작업 유형")
     filters: Optional[List[Filter]] = Field(default=None, description="필터 조건")
     aggregations: Optional[List[Aggregation]] = Field(default=None, description="집계 조건 (operation=aggregate일 때)")
     group_by: Optional[List[str]] = Field(default=None, description="그룹화 필드")
     order_by: Optional[List[OrderBy]] = Field(default=None, description="정렬 조건")
     limit: int = Field(default=10, ge=1, le=100, description="최대 조회 개수")
     time_range: Optional[TimeRange] = Field(default=None, description="시간 범위 (시계열 데이터)")
+    # 의도 분류 필드 (LLM이 판단)
+    query_intent: QueryIntent = Field(
+        default=QueryIntent.NEW_QUERY,
+        description="쿼리 의도: new_query(새 검색) 또는 refine_previous(이전 결과 필터링)"
+    )
+    # Clarification 필드 (LLM이 불확실할 때 사용)
+    needs_clarification: bool = Field(default=False, description="추가 명확화 필요 여부")
+    # 결과 선택 clarification (filter_local/aggregate_local에서 어떤 결과인지 모호할 때)
+    needs_result_clarification: bool = Field(
+        default=False,
+        description="어떤 이전 결과를 대상으로 할지 모호할 때 true. 기본값 false면 직전 결과 사용"
+    )
+    clarification_question: Optional[str] = Field(default=None, description="사용자에게 할 질문")
+    clarification_options: Optional[List[str]] = Field(default=None, description="선택지 (있는 경우)")
+    # Direct Answer (DB 조회 없이 LLM이 직접 답변)
+    direct_answer: Optional[str] = Field(
+        default=None,
+        description="query_intent가 direct_answer일 때, LLM이 생성한 답변 텍스트"
+    )
 
 
 # ============================================
@@ -109,45 +166,6 @@ ENTITY_SCHEMAS = {
             "totalAmount": "총 주문 금액 (숫자)",
             "status": "주문 상태 (PENDING, PAID, SHIPPED, DELIVERED, CANCELLED)",
             "paymentGateway": "결제 수단 (Stripe, PayPal, Bank Transfer)"
-        }
-    },
-    "Customer": {
-        "description": "고객 정보",
-        "fields": {
-            "customerId": "고객 ID (정수)",
-            "name": "고객명 (문자열)",
-            "email": "이메일 (문자열)",
-            "phone": "전화번호 (문자열)"
-        }
-    },
-    "Product": {
-        "description": "상품 정보",
-        "fields": {
-            "productId": "상품 ID (정수)",
-            "name": "상품명 (문자열)",
-            "description": "상품 설명 (문자열)",
-            "price": "가격 (숫자)",
-            "category": "카테고리 (문자열)"
-        }
-    },
-    "Inventory": {
-        "description": "재고 정보",
-        "fields": {
-            "inventoryId": "재고 ID (정수)",
-            "productId": "상품 ID (정수)",
-            "quantity": "수량 (정수)",
-            "warehouse": "창고 (문자열)"
-        }
-    },
-    "PaymentLog": {
-        "description": "결제 로그 (시계열 데이터, timeRange 필수)",
-        "fields": {
-            "logId": "로그 ID (정수)",
-            "orderId": "주문 ID (정수)",
-            "timestamp": "로그 시간 (날짜/시간)",
-            "level": "로그 레벨 (DEBUG, INFO, WARN, ERROR, FATAL)",
-            "message": "로그 메시지 (문자열)",
-            "errorCode": "에러 코드 (문자열, 선택)"
         }
     },
     # ============================================
@@ -331,6 +349,100 @@ class QueryPlannerService:
                 logger.info(f"Using OpenAI LLM: {os.getenv('LLM_MODEL', 'gpt-4o-mini')}")
         return self._llm
 
+    def _get_clarification_llm(self):
+        """Clarification 판단용 LLM (상위 모델 사용)"""
+        clarification_model = os.getenv("CLARIFICATION_MODEL", "gpt-4o")
+
+        if self._llm_provider == "anthropic":
+            from langchain_anthropic import ChatAnthropic
+            llm = ChatAnthropic(
+                model=clarification_model if "claude" in clarification_model else "claude-sonnet-4-20250514",
+                temperature=0,
+                api_key=self.api_key
+            )
+        else:
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(
+                model=clarification_model,
+                temperature=0,
+                api_key=self.api_key
+            )
+
+        logger.info(f"Using Clarification LLM: {clarification_model}")
+        return llm
+
+    async def check_clarification_needed(
+        self,
+        user_message: str,
+        result_summaries: List[Dict[str, Any]],
+        query_intent: str
+    ) -> bool:
+        """
+        2단계 판단: Clarification이 필요한지 상위 모델로 판단
+
+        Args:
+            user_message: 사용자 입력 메시지
+            result_summaries: 이전 결과 요약 목록 [{"entity": "Payment", "count": 30, "filters": "..."}, ...]
+            query_intent: 현재 query_intent (filter_local, aggregate_local 등)
+
+        Returns:
+            bool: True면 clarification 필요, False면 직전 결과 사용
+        """
+        # 결과가 1개 이하면 clarification 불필요
+        if len(result_summaries) <= 1:
+            logger.info(f"[Clarification Check] Single result, no clarification needed")
+            return False
+
+        # filter_local, aggregate_local이 아니면 clarification 불필요
+        if query_intent not in ["filter_local", "aggregate_local"]:
+            logger.info(f"[Clarification Check] Intent '{query_intent}' doesn't need clarification")
+            return False
+
+        try:
+            llm = self._get_clarification_llm()
+
+            # 결과 요약 텍스트 생성
+            results_text = "\n".join([
+                f"- 결과 #{i+1}: {r.get('entity', 'unknown')} {r.get('count', '?')}건" +
+                (f" (필터: {r.get('filters', '')})" if r.get('filters') else "")
+                for i, r in enumerate(result_summaries)
+            ])
+
+            prompt = f"""당신은 사용자 의도 판단 전문가입니다.
+
+## 현재 상황
+- 사용자가 이전에 여러 데이터를 조회했습니다.
+- 지금 사용자가 집계/필터 요청을 했습니다.
+- 어떤 데이터를 대상으로 하는지 명확한지 판단해주세요.
+
+## 이전 조회 결과 (세션 내)
+{results_text}
+
+## 사용자 입력
+"{user_message}"
+
+## 판단 기준
+1. "이중에", "여기서", "직전", "방금", "위 결과" 등 **참조 표현이 있으면** → 명확함 (NO)
+2. 참조 표현 없이 "합산해줘", "필터링해줘" 등만 있고 **다중 결과가 있으면** → 모호함 (YES)
+3. 특정 결과를 명시적으로 지정하면 ("30건에서", "도서 결과에서") → 명확함 (NO)
+
+## 응답
+clarification이 필요하면 "YES", 필요 없으면 "NO"만 응답하세요.
+다른 설명 없이 YES 또는 NO만 답하세요."""
+
+            from langchain_core.messages import HumanMessage
+            response = await llm.ainvoke([HumanMessage(content=prompt)])
+            answer = response.content.strip().upper()
+
+            needs_clarification = answer == "YES"
+            logger.info(f"[Clarification Check] LLM decision: {answer} -> needs_clarification={needs_clarification}")
+
+            return needs_clarification
+
+        except Exception as e:
+            logger.error(f"[Clarification Check] Error: {e}, defaulting to False")
+            return False
+
     def _build_system_prompt(self) -> str:
         """결제 도메인 특화 시스템 프롬프트 생성"""
         schema_info = json.dumps(ENTITY_SCHEMAS, ensure_ascii=False, indent=2)
@@ -351,6 +463,36 @@ class QueryPlannerService:
 """
         return f"""당신은 PG(Payment Gateway) 결제 백오피스 쿼리 어시스턴트입니다.
 사용자의 자연어 요청을 분석하여 적절한 QueryPlan을 생성합니다.
+
+## ⚠️ 최우선 규칙 (반드시 먼저 읽으세요!)
+
+### 1. 도메인 용어 자동 매핑 (clarification 금지!)
+다음 단어가 포함되면 **무조건** 해당 엔티티로 처리하세요. **절대로 needs_clarification을 true로 설정하지 마세요!**
+
+| 사용자 표현 | 엔티티 | 예시 |
+|------------|--------|------|
+| 거래, 트랜잭션, 결제, 이력, 내역 | **Payment** | "최근 거래 30건" → Payment, limit:30 |
+| 환불, 취소환불, 반품 | **Refund** | "환불 내역" → Refund |
+| 가맹점, 상점, 업체, merchant | **Merchant** | "가맹점 목록" → Merchant |
+| 정산, settlement | **Settlement** | "정산 내역" → Settlement |
+
+### 2. clarification이 필요한 경우 (매우 드묾)
+**오직 다음 경우에만** needs_clarification=true:
+- "정보 보여줘", "데이터 조회해줘" (무엇을?)
+- 도메인 용어가 전혀 없는 모호한 요청
+
+### 3. "최근 거래 30건 조회" 처리 예시 (정답)
+```json
+{{{{
+  "entity": "Payment",
+  "operation": "list",
+  "limit": 30,
+  "orderBy": [{{{{"field": "createdAt", "direction": "desc"}}}}],
+  "query_intent": "new_query",
+  "needs_clarification": false
+}}}}
+```
+**needs_clarification: false, clarification_question: null** 이어야 합니다!
 
 {current_date_info}
 
@@ -381,19 +523,23 @@ class QueryPlannerService:
 ### 기타
 - "결제 이력", "상태 변경 이력" → **PaymentHistory**
 - "잔액 거래", "정산 전 거래" → **BalanceTransaction**
-- "결제 로그", "에러 로그", "오류 로그" → **PaymentLog**
 - "결제 수단", "등록된 카드" → **PaymentMethod**
 
-## 작업 유형
+## 작업 유형 (operation 필드) - 중요!
 
+**operation 필드는 Core API 작업 유형이며, 다음 3가지만 가능:**
 1. **list**: 데이터 목록 조회 (기본값)
-2. **aggregate**: 집계/통계
-   - "몇 건", "건수", "개수" → count
-   - "총합", "합계", "총" → sum
-   - "평균" → avg
-   - "최대", "최고" → max
-   - "최소", "최저" → min
+2. **aggregate**: 서버에서 집계/통계 (DB에서 집계)
 3. **search**: 텍스트 검색 (LIKE 연산)
+
+**주의: filter_local, aggregate_local, direct_answer는 operation이 아닌 query_intent 필드에 설정!**
+- operation: "list" | "aggregate" | "search" (Core API용)
+- query_intent: "new_query" | "refine_previous" | "filter_local" | "aggregate_local" | "direct_answer" (클라이언트 처리용)
+
+**예시:**
+- 클라이언트에서 필터링 → operation: "list", query_intent: "filter_local"
+- 클라이언트에서 집계 → operation: "list", query_intent: "aggregate_local"
+- LLM 직접 답변 → operation: "list", query_intent: "direct_answer"
 
 ## 시나리오별 쿼리 패턴
 
@@ -450,17 +596,21 @@ class QueryPlannerService:
 - **FAILED**: 결제 실패 - "실패", "오류"
 - **EXPIRED**: 만료 (가상계좌 기한 초과)
 
-## 필터 연산자
+## 필터 연산자 (반드시 문자열 코드 사용!)
 
-- **eq**: 같음 (=)
-- **ne**: 같지 않음 (!=)
-- **gt**: 초과 (>)
-- **gte**: 이상 (>=)
-- **lt**: 미만 (<)
-- **lte**: 이하 (<=)
-- **in**: 포함 (IN [...])
-- **like**: 패턴 매칭 (LIKE)
-- **between**: 범위 (BETWEEN)
+| 코드 | 의미 | 예시 |
+|------|------|------|
+| eq | 같음 | status eq "DONE" |
+| ne | 같지 않음 | status ne "FAILED" |
+| gt | 초과 | amount gt 10000 |
+| gte | 이상 | amount gte 50000 |
+| lt | 미만 | amount lt 1000 |
+| lte | 이하 | amount lte 100000 |
+| in | 포함 | status in ["DONE", "CANCELED"] |
+| like | 패턴 매칭 | orderName like "도서" |
+| between | 범위 | amount between [10000, 50000] |
+
+**중요**: 기호(>=, <=, >, <, =, != 등)를 사용하지 마세요. 반드시 문자열 코드(eq, gte 등)만 사용하세요.
 
 ## 정렬 규칙
 
@@ -473,7 +623,7 @@ class QueryPlannerService:
 ## 필수 timeRange 엔티티
 
 다음 엔티티는 대용량 시계열 데이터이므로 **timeRange 지정을 강력히 권장**합니다:
-- Payment, PaymentHistory, PaymentLog, BalanceTransaction
+- Payment, PaymentHistory, BalanceTransaction
 
 시간 범위가 명시되지 않은 경우 **최근 7일**로 기본 설정하세요.
 
@@ -482,7 +632,182 @@ class QueryPlannerService:
 1. 물리적 테이블명이나 컬럼명을 사용하지 마세요 (논리명만 사용)
 2. limit의 기본값은 10, 최대값은 100
 3. 집계 쿼리(aggregate)에서 groupBy 없이 단순 집계만 할 경우 결과는 단일 값
-4. 가맹점ID나 주문번호가 구체적으로 명시되면 해당 값으로 필터링"""
+4. 가맹점ID나 주문번호가 구체적으로 명시되면 해당 값으로 필터링
+
+## 쿼리 의도 분류 (query_intent) - 매우 중요!
+
+모든 요청에 **query_intent** 필드를 반드시 설정하세요:
+
+### new_query (새로운 검색)
+다음 경우 query_intent를 "new_query"로 설정:
+- 첫 질문 또는 대화 컨텍스트가 없는 경우
+- 다른 엔티티를 조회하는 경우 (예: Payment → Refund)
+- "새로", "다른", "별도로" 등 새 검색 의도 표현
+- 이전 결과와 관련 없는 완전히 새로운 요청
+
+### refine_previous (서버 재조회)
+다음 경우 query_intent를 "refine_previous"로 설정:
+- 필터 조건을 변경하여 DB에서 새로 조회해야 하는 경우
+- **"다시 조회"**, **"새로 검색"**, **"조건 변경"** 등의 표현
+- 명시적인 "전체 데이터에서", "DB에서", "처음부터" 등의 표현
+
+### filter_local (클라이언트 필터링) - 중요!
+다음 경우 query_intent를 "filter_local"로 설정:
+- **"이중"**, **"이중에"**, **"이 중에서"**, **"여기서"**, **"그 중에서"**, **"그중에"**, **"그중"** 등 이전 결과 참조 표현
+- **"이전 결과에서"**, **"조회된 결과에서"**, **"방금 결과에서"** 등 명시적 참조
+- "화면에 있는 데이터에서", "위 결과에서", "받은 데이터에서" 등
+- 이미 조회된 데이터를 클라이언트에서 재가공하려는 의도
+- 서버 재조회 없이 메모리에 있는 결과만 필터링
+
+**filter_local에서 entity 처리 규칙 (매우 중요!):**
+- filter_local일 때 **entity는 생략 가능** (이전 대화 컨텍스트에서 자동 추론)
+- entity를 명시하지 않아도 시스템이 이전 queryPlan의 entity를 자동 상속
+- **절대로 needs_clarification을 true로 설정하지 마세요!**
+- filters 필드는 반드시 설정해야 함 (필터 조건 필수)
+
+**filter_local 설정 시 filters 필드도 반드시 설정! (매우 중요)**
+필터링할 조건을 filters 배열에 포함해야 합니다:
+- "이중에 도서만" → filters 배열에 field=orderName, operator=like, value=도서 추가
+- "여기서 DONE만" → filters 배열에 field=status, operator=eq, value=DONE 추가
+- "이중에 mer_001만" → filters 배열에 field=merchantId, operator=eq, value=mer_001 추가
+- "도서 관련 거래만" → filters 배열에 field=orderName, operator=like, value=도서 추가
+필터 조건 없이 filter_local만 설정하면 안 됨!
+
+**filter_local vs refine_previous 구분:**
+- "이중에 도서만" → filter_local (이전 결과 참조)
+- "이전 결과에서 도서만" → filter_local (명시적 참조)
+- "도서만 다시 조회" → refine_previous (서버 재조회)
+- "처음부터 도서만 검색" → new_query 또는 refine_previous
+
+### aggregate_local (클라이언트 집계) - 중요!
+다음 경우 query_intent를 "aggregate_local"로 설정:
+- **이전 대화에서 조회/필터링된 결과가 있는 상태**에서
+- **"합산", "합계", "총액", "총합", "평균", "개수", "몇 건" 등 집계 표현**이 있고
+- **명시적으로 "전체 데이터"라고 하지 않은 경우**
+- 예: "금액 합산해줘", "총액 얼마야", "평균 금액", "몇 건이야"
+
+**aggregate_local 설정 시 aggregations 필드도 반드시 설정:**
+- "합산", "합계", "총액" → aggregations 배열에 포함:
+  - function: "sum", field: "amount", alias: "totalAmount"
+  - displayLabel: "결제 금액 합계" (한글로 자연스럽게)
+  - currency: "USD" 또는 "KRW" (데이터 화폐 단위에 맞게)
+- "평균" → function: "avg", displayLabel: "평균 결제 금액", currency 설정
+- "개수", "몇 건" → function: "count", field: "*", displayLabel: "총 건수", currency: null
+
+**중요: displayLabel과 currency는 LLM이 문맥에 맞게 자연스럽게 설정**
+- Payment 엔티티의 amount 필드는 일반적으로 USD (달러)
+- displayLabel은 사용자에게 보여줄 한글 표현 (예: "결제 금액 합계", "평균 거래액")
+
+**aggregate_local vs new_query(aggregate) 구분:**
+- "금액 합산해줘" (이전 결과 있음) → aggregate_local (이전 결과 집계)
+- "전체 결제 금액 합산" → new_query + operation:aggregate (서버에서 전체 집계)
+- "처음부터 합산" → new_query + operation:aggregate (서버에서 전체 집계)
+
+## 결과 선택 clarification (needs_result_clarification) - 매우 중요!
+
+**기본 원칙**: filter_local이나 aggregate_local일 때, **기본적으로 직전(가장 최근) 결과를 사용**합니다.
+- needs_result_clarification의 **기본값은 false**
+- 단, **다중 결과 + 참조 표현 없음** 상황에서는 **true로 설정**
+
+### 🎯 Few-shot 예시 (판단 기준) - 반드시 참고!
+
+**예시 1: 명확한 참조 표현 있음 → false**
+세션 결과: [Payment 30건], [Refund 15건]
+사용자: "이중에 합산해줘"
+판단: "이중에"가 직전 결과(Refund 15건)를 명확히 참조
+→ needs_result_clarification: **false**
+
+**예시 2: 참조 없음 + 다른 entity 다중 결과 → true**
+세션 결과: [Payment 30건], [Refund 15건]
+사용자: "금액 합산해줘"
+판단: 참조 표현 없음 + Payment/Refund 둘 다 금액 있음 → 어떤 결과인지 모호
+→ needs_result_clarification: **true**
+
+**예시 3: 참조 없음 + 같은 entity 다른 조건 → true**
+세션 결과: [Payment 30건], [Payment 도서 7건 (필터링됨)]
+사용자: "합산해줘"
+판단: 같은 Payment지만 30건 전체인지 도서 7건인지 불명확
+→ needs_result_clarification: **true**
+
+**예시 4: 명확한 직전 참조 → false**
+세션 결과: [Payment 30건], [Payment 도서 7건]
+사용자: "여기서 mer_001만 필터링"
+판단: "여기서"가 직전 결과(도서 7건)를 명확히 참조
+→ needs_result_clarification: **false**
+
+**예시 5: 단일 결과만 있음 → false**
+세션 결과: [Payment 30건]
+사용자: "금액 합산해줘"
+판단: 결과가 1개뿐이므로 당연히 그것 대상
+→ needs_result_clarification: **false**
+
+### 판단 체크리스트 (순서대로 확인!)
+1. 세션에 결과가 **1개뿐**인가? → **false** (선택지 없음)
+2. "이중에", "여기서", "직전", "방금" 등 **참조 표현**이 있는가? → **false** (직전 결과)
+3. 참조 표현 없고 + 다중 결과 + **서로 다른 entity** → **true** (모호함)
+4. 참조 표현 없고 + 다중 결과 + **같은 entity 다른 조건** → **true** (모호함)
+
+### 참조 표현 예시
+- 직전 결과 참조: "이중에", "이중", "여기서", "직전", "방금", "위 결과에서", "조회된 결과에서"
+- 특정 결과 참조: "아까 30건에서", "처음 결과에서", "두 번째 결과"
+
+## direct_answer (LLM 직접 답변) - 매우 중요!
+
+다음 경우 query_intent를 "direct_answer"로 설정하고, **direct_answer 필드에 답변을 작성**하세요:
+
+1. **이전 집계 결과에 대한 산술 연산**:
+   - "5로 나누면?", "10을 곱하면?", "반으로 나누면?"
+   - 이전 대화에서 집계 결과(예: $1,451,000)가 있으면, 직접 계산해서 답변
+   - 예: direct_answer = "결제 금액 합계 $1,451,000을 5로 나누면 **$290,200**입니다."
+
+2. **단순 질문/설명 요청**:
+   - "이게 뭐야?", "설명해줘", "어떤 의미야?"
+   - DB 조회 없이 답변 가능한 질문
+
+3. **계산 결과 포맷**:
+   - 화폐 단위 유지 (USD면 $, KRW면 원)
+   - 큰 숫자는 읽기 쉽게 (예: $290,200, 29만 200달러)
+   - 마크다운 볼드(**결과값**)로 강조
+
+**direct_answer 예시:**
+| 사용자 입력 | 이전 컨텍스트 | direct_answer |
+|------------|--------------|---------------|
+| "5로 나누면?" | 집계 결과 $1,451,000 | "결제 금액 합계 $1,451,000을 5로 나누면 **$290,200**입니다." |
+| "반으로 나누면?" | 집계 결과 $1,451,000 | "$1,451,000의 절반은 **$725,500**입니다." |
+| "10% 수수료 빼면?" | 집계 결과 $1,451,000 | "10% 수수료($145,100)를 제외하면 **$1,305,900**입니다." |
+
+### 의도 분류 예시
+| 사용자 입력 | 대화 컨텍스트 | query_intent |
+|------------|--------------|--------------|
+| "최근 결제 30건" | 없음 | new_query |
+| "DONE 상태만 다시 조회" | 결제 목록 조회 후 | refine_previous |
+| "처음부터 100만원 이상만" | 결제 목록 조회 후 | refine_previous |
+| "이중에 도서만" | 결제 목록 조회 후 | **filter_local** (entity 생략 OK) |
+| "이중 도서만" | 결제 목록 조회 후 | **filter_local** (entity 생략 OK) |
+| "이중에 mer_001만" | 결제 목록 조회 후 | **filter_local** (entity 생략 OK) |
+| "이중 mer_001만" | 결제 목록 조회 후 | **filter_local** (entity 생략 OK) |
+| "여기서 DONE만" | 결제 목록 조회 후 | **filter_local** |
+| "이전 결과에서 도서만" | 결제 목록 조회 후 | **filter_local** |
+| "조회된 결과에서 DONE만" | 결제 목록 조회 후 | **filter_local** |
+| "방금 결과에서 카드 결제만" | 결제 목록 조회 후 | **filter_local** |
+| "금액 합산해줘" | 결제 목록 조회 후 | **aggregate_local** |
+| "총액 얼마야" | 필터링된 결과 조회 후 | **aggregate_local** |
+| "평균 금액" | 결제 목록 조회 후 | **aggregate_local** |
+| "몇 건이야" | 결제 목록 조회 후 | **aggregate_local** |
+| "전체 결제 금액 합산" | 결제 목록 조회 후 | new_query (명시적 전체) |
+| "환불 내역 조회해줘" | 결제 목록 조회 후 | new_query (다른 엔티티) |
+| "다른 가맹점 결제" | 특정 가맹점 결제 조회 후 | new_query |
+
+### 중요 주의사항
+1. refine_previous일 때 **새로 추가할 필터만** filters에 포함 (기존 필터는 시스템이 병합)
+2. refine_previous일 때 **entity는 이전과 동일하게** 유지
+3. 불확실한 경우 기본값은 **new_query** (안전한 선택)
+
+## 기본 엔티티 규칙 (상단 최우선 규칙 참조)
+
+**⚠️ 다시 한번 강조: "거래", "결제", "트랜잭션", "내역" = Payment 엔티티!**
+- needs_clarification은 **절대로** true로 설정하지 마세요!
+- 도메인 용어가 있으면 바로 해당 엔티티로 QueryPlan을 생성하세요."""
 
     async def _get_rag_context(self, user_message: str) -> str:
         """RAG 서비스에서 관련 문서 검색"""
@@ -511,20 +836,39 @@ class QueryPlannerService:
     async def generate_query_plan(
         self,
         user_message: str,
-        conversation_context: Optional[str] = None
+        conversation_context: Optional[str] = None,
+        enable_validation: bool = True
     ) -> Dict[str, Any]:
         """
-        자연어 메시지를 QueryPlan으로 변환
+        자연어 메시지를 QueryPlan으로 변환 (2단계 검증 포함)
 
         Args:
             user_message: 사용자 입력 메시지
             conversation_context: 이전 대화 컨텍스트 (선택)
+            enable_validation: 2단계 검증 활성화 여부 (기본: True)
 
         Returns:
             QueryPlan 딕셔너리
         """
         logger.info(f"Generating QueryPlan for: {user_message}")
 
+        # 1단계: Generator - QueryPlan 생성
+        query_plan = await self._generate_initial_plan(user_message, conversation_context)
+
+        # 2단계: Validator - 품질 검증 (활성화된 경우)
+        if enable_validation:
+            query_plan = await self._validate_and_correct(
+                user_message, query_plan, conversation_context
+            )
+
+        return query_plan
+
+    async def _generate_initial_plan(
+        self,
+        user_message: str,
+        conversation_context: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """1단계: Generator - 초기 QueryPlan 생성"""
         # RAG 컨텍스트 검색
         rag_context = await self._get_rag_context(user_message)
 
@@ -544,6 +888,11 @@ class QueryPlannerService:
             if rag_context:
                 system_prompt = f"{system_prompt}\n\n{rag_context}"
 
+            # 대화 컨텍스트가 있으면 시스템 프롬프트에 추가
+            if conversation_context:
+                system_prompt = f"{system_prompt}\n\n{conversation_context}"
+                logger.info("Added conversation context to system prompt")
+
             prompt = ChatPromptTemplate.from_messages([
                 ("system", system_prompt),
                 ("human", "{user_message}")
@@ -557,7 +906,7 @@ class QueryPlannerService:
             # Pydantic 모델을 딕셔너리로 변환
             query_plan = self._convert_to_dict(result)
 
-            logger.info(f"Generated QueryPlan: {query_plan}")
+            logger.info(f"Generated initial QueryPlan: {query_plan}")
             return query_plan
 
         except Exception as e:
@@ -565,20 +914,126 @@ class QueryPlannerService:
             # 폴백: 기본 QueryPlan 반환
             return self._create_fallback_plan(user_message)
 
+    async def _validate_and_correct(
+        self,
+        user_message: str,
+        query_plan: Dict[str, Any],
+        conversation_context: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """2단계: Validator - 품질 검증 및 자동 수정"""
+        from app.services.query_plan_validator import get_query_plan_validator
+
+        try:
+            validator = get_query_plan_validator()
+            validation_result = await validator.validate(
+                user_message, query_plan, conversation_context
+            )
+
+            logger.info(
+                f"Validation result: score={validation_result.quality_score:.2f}, "
+                f"valid={validation_result.is_valid}, "
+                f"issues={len(validation_result.issues)}"
+            )
+
+            # 자동 수정된 plan이 있으면 우선 사용
+            if validation_result.corrected_plan:
+                logger.info("Using auto-corrected plan")
+                corrected = validation_result.corrected_plan
+                corrected["_validation"] = {
+                    "score": validation_result.quality_score,
+                    "issues_count": len(validation_result.issues),
+                    "time_ms": validation_result.validation_time_ms,
+                    "auto_corrected": True
+                }
+                return corrected
+
+            # 검증 통과 (corrected_plan 없이)
+            if validation_result.is_valid:
+                query_plan["_validation"] = {
+                    "score": validation_result.quality_score,
+                    "issues_count": len(validation_result.issues),
+                    "time_ms": validation_result.validation_time_ms
+                }
+                return query_plan
+
+            # clarification 필요
+            if validation_result.clarification_needed:
+                return {
+                    "needs_clarification": True,
+                    "clarification_question": validation_result.clarification_question,
+                    "clarification_options": validation_result.clarification_options or [],
+                    "_validation": {
+                        "score": validation_result.quality_score,
+                        "issues": [
+                            {"type": i.type.value, "message": i.message}
+                            for i in validation_result.issues
+                        ]
+                    }
+                }
+
+            # 검증 실패했지만 clarification도 불필요한 경우 (원본 반환)
+            query_plan["_validation"] = {
+                "score": validation_result.quality_score,
+                "issues_count": len(validation_result.issues),
+                "time_ms": validation_result.validation_time_ms,
+                "warning": "Validation failed but no clarification needed"
+            }
+            return query_plan
+
+        except Exception as e:
+            logger.error(f"Validation failed with error: {e}")
+            # 검증 실패 시 원본 반환
+            query_plan["_validation"] = {"error": str(e)}
+            return query_plan
+
+    # 시계열 데이터 엔티티 (timeRange 필수)
+    TIME_SERIES_ENTITIES = {"Payment", "PaymentHistory", "BalanceTransaction"}
+
+    def _get_default_time_range(self) -> Dict[str, str]:
+        """기본 시간 범위 반환 (최근 7일)"""
+        now = datetime.now()
+        start = now - timedelta(days=7)
+        return {
+            "start": start.strftime("%Y-%m-%dT00:00:00Z"),
+            "end": now.strftime("%Y-%m-%dT23:59:59Z")
+        }
+
+    def _get_enum_value(self, val) -> Any:
+        """enum 또는 string에서 값 추출"""
+        if val is None:
+            return None
+        if hasattr(val, 'value'):
+            return val.value
+        return val
+
     def _convert_to_dict(self, plan: QueryPlan) -> Dict[str, Any]:
         """QueryPlan Pydantic 모델을 API용 딕셔너리로 변환"""
+        # Clarification 요청인 경우
+        if plan.needs_clarification:
+            return {
+                "needs_clarification": True,
+                "clarification_question": plan.clarification_question,
+                "clarification_options": plan.clarification_options or []
+            }
+
+        # 일반 쿼리 (entity가 필수)
         result = {
-            "entity": plan.entity.value,
-            "operation": plan.operation.value,
-            "limit": plan.limit
+            "entity": self._get_enum_value(plan.entity),
+            "operation": self._get_enum_value(plan.operation) or "list",
+            "limit": plan.limit,
+            "query_intent": self._get_enum_value(plan.query_intent) or "new_query",
+            "needs_result_clarification": plan.needs_result_clarification,
+            "direct_answer": plan.direct_answer
         }
 
         if plan.filters:
             result["filters"] = [
                 {
-                    "field": f.field,
-                    "operator": f.operator.value,
-                    "value": f.value
+                    "field": f.field if hasattr(f, 'field') else f.get('field'),
+                    "operator": normalize_operator(
+                        self._get_enum_value(f.operator if hasattr(f, 'operator') else f.get('operator'))
+                    ),
+                    "value": f.value if hasattr(f, 'value') else f.get('value')
                 }
                 for f in plan.filters
             ]
@@ -588,7 +1043,9 @@ class QueryPlannerService:
                 {
                     "function": a.function,
                     "field": a.field,
-                    "alias": a.alias
+                    "alias": a.alias,
+                    "displayLabel": a.displayLabel,
+                    "currency": a.currency
                 }
                 for a in plan.aggregations
             ]
@@ -607,57 +1064,24 @@ class QueryPlannerService:
                 "start": plan.time_range.start,
                 "end": plan.time_range.end
             }
+        # limit이 있으면 timeRange 없이도 동작 (ORDER BY + LIMIT으로 최신 N건 조회)
 
         return result
 
     def _create_fallback_plan(self, user_message: str) -> Dict[str, Any]:
-        """LLM 실패 시 결제 도메인 특화 폴백 QueryPlan 생성"""
-        logger.warning("Using fallback QueryPlan")
+        """LLM 실패 시 clarification 요청 반환 (키워드 기반 추측 제거)"""
+        logger.warning("LLM failed, requesting clarification")
 
-        message_lower = user_message.lower()
-
-        # 결제 도메인이므로 기본값을 Payment로 설정
-        entity = "Payment"
-
-        # 엔티티 키워드 매핑 (우선순위 순)
-        entity_keywords = {
-            "Refund": ["환불", "refund", "취소환불"],
-            "Settlement": ["정산", "settlement", "지급"],
-            "Merchant": ["가맹점", "merchant", "상점", "업체"],
-            "PaymentHistory": ["이력", "history", "상태 변경"],
-            "PaymentLog": ["로그", "log", "에러", "error"],
-            "PaymentMethod": ["결제수단", "카드등록", "payment method"],
-            "BalanceTransaction": ["잔액", "balance", "거래내역"],
-            "Payment": ["결제", "payment", "거래", "트랜잭션", "transaction"],
-            # 기존 e-commerce 엔티티
-            "Customer": ["고객", "customer"],
-            "Order": ["주문", "order"],
-            "Product": ["상품", "product"],
-            "Inventory": ["재고", "inventory"],
-        }
-
-        for ent, keywords in entity_keywords.items():
-            if any(kw in message_lower for kw in keywords):
-                entity = ent
-                break
-
-        # 집계 키워드 감지
-        aggregate_keywords = ["통계", "현황", "추이", "추세", "비율", "몇 건", "몇건", "얼마나", "총", "합계", "평균", "건수"]
-        operation = "aggregate" if any(kw in message_lower for kw in aggregate_keywords) else "list"
-
-        result = {
-            "entity": entity,
-            "operation": operation,
-            "limit": 10
-        }
-
-        # aggregate 연산이면 기본 집계 추가
-        if operation == "aggregate":
-            result["aggregations"] = [
-                {"function": "count", "field": "*", "alias": "count"}
+        return {
+            "needs_clarification": True,
+            "clarification_question": f"'{user_message}'에 대해 어떤 데이터를 조회하시겠습니까?",
+            "clarification_options": [
+                "결제 내역 (Payment)",
+                "환불 내역 (Refund)",
+                "가맹점 정보 (Merchant)",
+                "정산 내역 (Settlement)"
             ]
-
-        return result
+        }
 
 
 # 싱글톤 인스턴스

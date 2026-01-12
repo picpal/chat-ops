@@ -4,13 +4,176 @@ Chat API - Step 6: LangChain + Natural Language Processing
 """
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any, List
 import httpx
 import logging
 import os
 import uuid
 from datetime import datetime
+
+
+def to_camel(string: str) -> str:
+    """snake_case를 camelCase로 변환"""
+    components = string.split('_')
+    return components[0] + ''.join(x.title() for x in components[1:])
+
+
+def summarize_query_plan(query_plan: Dict[str, Any]) -> str:
+    """QueryPlan을 간단한 요약 문자열로 변환"""
+    parts = []
+
+    entity = query_plan.get("entity", "")
+    if entity:
+        parts.append(entity)
+
+    # 필터 요약
+    filters = query_plan.get("filters", [])
+    if filters:
+        filter_strs = [f"{f.get('field')} {f.get('operator')} {f.get('value')}" for f in filters]
+        parts.append(f"filters:[{', '.join(filter_strs)}]")
+
+    # limit
+    if query_plan.get("limit"):
+        parts.append(f"limit:{query_plan['limit']}")
+
+    # orderBy
+    order_by = query_plan.get("orderBy", [])
+    if order_by:
+        order_strs = [f"{o.get('field')} {o.get('direction', 'asc')}" for o in order_by]
+        parts.append(f"orderBy:[{', '.join(order_strs)}]")
+
+    return ", ".join(parts) if parts else "[쿼리 없음]"
+
+
+def build_conversation_context(history: List["ChatMessageItem"]) -> str:
+    """이전 대화를 프롬프트용 텍스트로 변환 (다중 결과 상황 명시 포함)"""
+    if not history:
+        return ""
+
+    context = "## 이전 대화 컨텍스트\n\n"
+
+    # ============================================
+    # [NEW] 다중 결과 상황 명시 섹션
+    # ============================================
+    result_messages = []
+    for i, msg in enumerate(history):
+        if msg.role == "assistant" and msg.queryResult:
+            entity = msg.queryPlan.get("entity", "unknown") if msg.queryPlan else "unknown"
+            count = msg.queryResult.get("totalCount", 0)
+            # 필터 정보도 추가 (같은 entity라도 조건이 다를 수 있음)
+            filters = msg.queryPlan.get("filters", []) if msg.queryPlan else []
+            filter_desc = ""
+            if filters:
+                filter_strs = [f"{f.get('field')}={f.get('value')}" for f in filters[:2]]
+                filter_desc = f" ({', '.join(filter_strs)})"
+            result_messages.append({
+                "index": i,
+                "entity": entity,
+                "count": count,
+                "filter_desc": filter_desc,
+                "is_latest": False
+            })
+
+    if result_messages:
+        result_messages[-1]["is_latest"] = True  # 마지막이 직전 결과
+
+        context += "### 📊 현재 세션의 조회 결과 현황\n"
+        for r in result_messages:
+            marker = "👉 (직전)" if r["is_latest"] else ""
+            context += f"- 결과 #{r['index']}: {r['entity']} {r['count']}건{r['filter_desc']} {marker}\n"
+
+        if len(result_messages) > 1:
+            # 다중 결과 경고 - LLM이 주목하도록
+            entities = set(r["entity"] for r in result_messages)
+            if len(entities) > 1:
+                context += f"\n⚠️ **다른 종류의 결과가 {len(result_messages)}개 있습니다** ({', '.join(entities)})\n"
+                context += "→ 사용자가 특정 결과를 지정하지 않으면 needs_result_clarification=true 권장\n"
+            else:
+                context += f"\n📌 동일 엔티티({list(entities)[0]}) 결과가 {len(result_messages)}개 있습니다 (조건이 다름).\n"
+                context += "→ 참조 표현 없이 집계/필터 요청 시 needs_result_clarification=true 고려\n"
+        context += "\n"
+
+    # ============================================
+    # 대화 히스토리 (기존 유지)
+    # ============================================
+    context += "### 대화 히스토리\n"
+    for msg in history[-5:]:
+        if msg.role == 'user':
+            context += f"사용자: {msg.content}\n"
+        else:
+            # queryPlan 요약 포함
+            if msg.queryPlan:
+                plan_summary = summarize_query_plan(msg.queryPlan)
+                context += f"어시스턴트: [쿼리: {plan_summary}]\n"
+            else:
+                context += f"어시스턴트: [결과 표시됨]\n"
+
+            # 집계 결과값 포함 (중요: 후속 계산용)
+            if msg.renderSpec and msg.renderSpec.get("type") == "text":
+                text_content = msg.renderSpec.get("text", {}).get("content", "")
+                if text_content and ("합계" in text_content or "$" in text_content or "원" in text_content):
+                    context += f"  → 집계 결과: {text_content}\n"
+
+    # ============================================
+    # 후속 질문 처리 규칙 (개선)
+    # ============================================
+    context += "\n### 후속 질문 처리 규칙\n"
+    context += "1. '이중에', '여기서', '직전', '방금' 등 참조 표현 → **직전 결과 사용**, needs_result_clarification=false\n"
+    context += "2. 참조 표현 없이 집계/필터 요청 + 다중 결과 → needs_result_clarification=true 고려\n"
+    context += "3. 후속 질문에서는 **이전 엔티티 유지** (다른 엔티티로 변경 금지)\n"
+    context += "4. 이전 집계 결과에 대한 산술 연산 → query_intent=direct_answer\n"
+    return context
+
+
+def get_previous_query_plan(history: List["ChatMessageItem"]) -> Optional[Dict[str, Any]]:
+    """이전 대화에서 마지막 queryPlan 추출"""
+    if not history:
+        return None
+
+    # 역순으로 탐색하여 가장 최근 assistant의 queryPlan 찾기
+    for msg in reversed(history):
+        if msg.role == 'assistant' and msg.queryPlan:
+            return msg.queryPlan
+    return None
+
+
+def merge_filters(previous_plan: Dict[str, Any], new_plan: Dict[str, Any]) -> Dict[str, Any]:
+    """이전 필터와 새 필터를 병합"""
+    if not previous_plan:
+        return new_plan
+
+    # clarification 요청이면 병합하지 않음
+    if new_plan.get("needs_clarification"):
+        return new_plan
+
+    # 이전 필터 가져오기
+    prev_filters = previous_plan.get("filters", [])
+    new_filters = new_plan.get("filters", [])
+
+    # 새 필터의 필드명 목록
+    new_filter_fields = {f.get("field") for f in new_filters}
+
+    # 이전 필터 중 새 필터에 없는 것만 병합 (중복 필드 방지)
+    merged_filters = list(new_filters)  # 새 필터 우선
+    for prev_filter in prev_filters:
+        if prev_filter.get("field") not in new_filter_fields:
+            merged_filters.append(prev_filter)
+
+    # 병합된 결과
+    merged_plan = dict(new_plan)
+    if merged_filters:
+        merged_plan["filters"] = merged_filters
+
+    # 이전 entity 유지 (새 plan에 entity가 없으면)
+    if not merged_plan.get("entity") and previous_plan.get("entity"):
+        merged_plan["entity"] = previous_plan["entity"]
+
+    # 이전 limit 유지 (새 plan이 기본값 10이면)
+    if merged_plan.get("limit") == 10 and previous_plan.get("limit"):
+        merged_plan["limit"] = previous_plan["limit"]
+
+    return merged_plan
 
 from app.services.query_planner import get_query_planner
 from app.services.render_composer import get_render_composer
@@ -22,24 +185,46 @@ router = APIRouter()
 
 # Configuration
 CORE_API_URL = os.getenv("CORE_API_URL", "http://localhost:8080")
+ENABLE_QUERY_PLAN_VALIDATION = os.getenv("ENABLE_QUERY_PLAN_VALIDATION", "true").lower() == "true"
+
+
+class ChatMessageItem(BaseModel):
+    """대화 메시지 아이템"""
+    id: str
+    role: str  # 'user' | 'assistant'
+    content: str
+    timestamp: str
+    status: Optional[str] = None
+    renderSpec: Optional[Dict[str, Any]] = None
+    queryResult: Optional[Dict[str, Any]] = None
+    queryPlan: Optional[Dict[str, Any]] = None  # 이전 쿼리 조건 저장용
 
 
 class ChatRequest(BaseModel):
     """채팅 요청"""
     message: str
     conversation_id: Optional[str] = None
+    session_id: Optional[str] = Field(default=None, alias="sessionId")
+    conversation_history: Optional[List[ChatMessageItem]] = Field(default=None, alias="conversationHistory")
+
+    class Config:
+        populate_by_name = True
 
 
 class ChatResponse(BaseModel):
-    """채팅 응답"""
-    render_spec: Dict[str, Any]
-    query_plan: Dict[str, Any]
-    conversation_id: str
-    original_message: str
-    processing_info: Dict[str, Any]
+    """채팅 응답 - UI 타입과 일치"""
+    request_id: str = Field(alias="requestId")
+    render_spec: Dict[str, Any] = Field(alias="renderSpec")
+    query_result: Optional[Dict[str, Any]] = Field(default=None, alias="queryResult")  # filter_local 시 None 가능
+    query_plan: Dict[str, Any] = Field(alias="queryPlan")  # 이번 쿼리 조건 (후속 질문용)
+    ai_message: Optional[str] = Field(default=None, alias="aiMessage")
+    timestamp: str
+
+    class Config:
+        populate_by_name = True
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat", response_model=ChatResponse, response_model_by_alias=True)
 async def chat(request: ChatRequest):
     """
     Step 6: LangChain 기반 자연어 처리
@@ -66,7 +251,306 @@ async def chat(request: ChatRequest):
         # Stage 1: Natural Language → QueryPlan
         stage_start = datetime.utcnow()
         query_planner = get_query_planner()
-        query_plan = await query_planner.generate_query_plan(request.message)
+
+        # 대화 컨텍스트 빌드
+        conversation_context = None
+        if request.conversation_history:
+            conversation_context = build_conversation_context(request.conversation_history)
+            logger.info(f"[{request_id}] Using conversation context with {len(request.conversation_history)} messages")
+
+        query_plan = await query_planner.generate_query_plan(
+            request.message,
+            conversation_context=conversation_context,
+            enable_validation=ENABLE_QUERY_PLAN_VALIDATION
+        )
+
+        # LLM이 판단한 의도에 따라 필터 병합 결정
+        query_intent = query_plan.get("query_intent", "new_query")
+        logger.info(f"[{request_id}] Query intent: {query_intent}")
+
+        if query_intent == "refine_previous":
+            if request.conversation_history:
+                previous_plan = get_previous_query_plan(request.conversation_history)
+                if previous_plan:
+                    logger.info(f"[{request_id}] Intent: refine_previous, merging with previous filters")
+                    logger.info(f"[{request_id}] Previous plan: {previous_plan}")
+                    query_plan = merge_filters(previous_plan, query_plan)
+                    logger.info(f"[{request_id}] Merged plan: {query_plan}")
+        elif query_intent == "filter_local":
+            # 클라이언트 사이드 필터링: Core API 호출 없이 필터 조건만 반환
+            logger.info(f"[{request_id}] Intent: filter_local, client-side filtering")
+
+            # entity가 없으면 이전 queryPlan에서 상속
+            if not query_plan.get("entity") and request.conversation_history:
+                previous_plan = get_previous_query_plan(request.conversation_history)
+                if previous_plan and previous_plan.get("entity"):
+                    query_plan["entity"] = previous_plan["entity"]
+                    logger.info(f"[{request_id}] Inherited entity from previous plan: {query_plan['entity']}")
+
+            # 이전 결과가 있는 메시지들 찾기
+            result_messages = []
+            if request.conversation_history:
+                logger.info(f"[{request_id}] Checking {len(request.conversation_history)} messages in history")
+                for i, msg in enumerate(request.conversation_history):
+                    has_query_result = msg.queryResult is not None
+                    logger.info(f"[{request_id}] Message {i}: role={msg.role}, hasQueryResult={has_query_result}")
+                    if msg.role == "assistant" and msg.queryResult:
+                        result_messages.append((i, msg))
+
+            logger.info(f"[{request_id}] Found {len(result_messages)} result messages")
+
+            # 1단계: LLM이 모호하다고 판단했는지 확인
+            needs_result_clarification = query_plan.get("needs_result_clarification", False)
+            logger.info(f"[{request_id}] 1st stage LLM decision: needs_result_clarification={needs_result_clarification}")
+
+            # 2단계: 다중 결과 + 1단계가 False면 상위 모델로 재판단
+            if len(result_messages) > 1 and not needs_result_clarification:
+                logger.info(f"[{request_id}] Multiple results but 1st stage said no clarification, invoking 2nd stage check...")
+
+                # 결과 요약 생성
+                result_summaries = []
+                for msg_idx, msg in result_messages:
+                    entity = msg.queryPlan.get("entity", "unknown") if msg.queryPlan else "unknown"
+                    count = 0
+                    if msg.queryResult:
+                        if isinstance(msg.queryResult, dict):
+                            count = msg.queryResult.get("totalCount", msg.queryResult.get("metadata", {}).get("rowsReturned", 0))
+                    filters_str = ""
+                    if msg.queryPlan and msg.queryPlan.get("filters"):
+                        filters_str = ", ".join([f"{f.get('field')}={f.get('value')}" for f in msg.queryPlan.get("filters", [])[:2]])
+                    result_summaries.append({"entity": entity, "count": count, "filters": filters_str})
+
+                # 2단계 LLM 판단 호출
+                needs_result_clarification = await query_planner.check_clarification_needed(
+                    user_message=request.message,
+                    result_summaries=result_summaries,
+                    query_intent=query_intent
+                )
+                logger.info(f"[{request_id}] 2nd stage LLM decision: needs_result_clarification={needs_result_clarification}")
+
+            if len(result_messages) > 1 and needs_result_clarification:
+                # 다중 결과 + LLM이 모호하다고 판단: clarification 요청
+                recent_results = result_messages[-5:]  # 최근 5개만
+                options = []
+                indices = []
+
+                for idx, (msg_idx, msg) in enumerate(reversed(recent_results)):
+                    # 결과 요약 라벨 생성
+                    entity = msg.queryPlan.get("entity", "데이터") if msg.queryPlan else "데이터"
+                    count = "?"
+                    if msg.queryResult:
+                        if isinstance(msg.queryResult, dict):
+                            count = msg.queryResult.get("totalCount", msg.queryResult.get("metadata", {}).get("rowsReturned", "?"))
+                        elif hasattr(msg.queryResult, "totalCount"):
+                            count = msg.queryResult.totalCount
+                    time_str = msg.timestamp[-8:-3] if msg.timestamp and len(msg.timestamp) >= 8 else ""
+
+                    label = f"직전: {entity} {count}건 ({time_str})" if idx == 0 else f"{entity} {count}건 ({time_str})"
+                    options.append(label)
+                    indices.append(msg_idx)
+
+                logger.info(f"[{request_id}] Multiple results found, requesting clarification")
+
+                clarification_render_spec = {
+                    "type": "clarification",
+                    "clarification": {
+                        "question": "어떤 조회 결과를 필터링할까요?",
+                        "options": options
+                    },
+                    "metadata": {
+                        "requestId": request_id,
+                        "targetResultIndices": indices,
+                        "pendingFilters": query_plan.get("filters", []),
+                        "generatedAt": datetime.utcnow().isoformat() + "Z"
+                    }
+                }
+
+                return ChatResponse(
+                    request_id=request_id,
+                    render_spec=clarification_render_spec,
+                    query_result=None,
+                    query_plan={**query_plan, "needs_clarification": True, "requestId": request_id},
+                    ai_message="어떤 조회 결과를 필터링할까요?",
+                    timestamp=datetime.utcnow().isoformat() + "Z"
+                )
+
+            # 결과가 1개 이하: 클라이언트에서 필터링하도록 응답
+            target_index = result_messages[-1][0] if result_messages else -1
+            logger.info(f"[{request_id}] Single result, returning filter_local response (target: {target_index})")
+
+            filter_local_render_spec = {
+                "type": "filter_local",
+                "filter": query_plan.get("filters", []),
+                "targetResultIndex": target_index,
+                "metadata": {
+                    "requestId": request_id,
+                    "generatedAt": datetime.utcnow().isoformat() + "Z"
+                }
+            }
+
+            return ChatResponse(
+                request_id=request_id,
+                render_spec=filter_local_render_spec,
+                query_result=None,
+                query_plan={**query_plan, "requestId": request_id},
+                ai_message="이전 결과에서 필터링합니다.",
+                timestamp=datetime.utcnow().isoformat() + "Z"
+            )
+        elif query_intent == "aggregate_local":
+            # 클라이언트 사이드 집계: 이전 결과에서 집계
+            logger.info(f"[{request_id}] Intent: aggregate_local, client-side aggregation")
+
+            # entity가 없으면 이전 queryPlan에서 상속
+            if not query_plan.get("entity") and request.conversation_history:
+                previous_plan = get_previous_query_plan(request.conversation_history)
+                if previous_plan and previous_plan.get("entity"):
+                    query_plan["entity"] = previous_plan["entity"]
+                    logger.info(f"[{request_id}] Inherited entity from previous plan: {query_plan['entity']}")
+
+            # 이전 결과가 있는 메시지들 찾기
+            result_messages = []
+            if request.conversation_history:
+                logger.info(f"[{request_id}] Checking {len(request.conversation_history)} messages in history")
+                for i, msg in enumerate(request.conversation_history):
+                    has_query_result = msg.queryResult is not None
+                    if msg.role == "assistant" and msg.queryResult:
+                        result_messages.append((i, msg))
+
+            logger.info(f"[{request_id}] Found {len(result_messages)} result messages for aggregation")
+
+            # 집계 정보 추출
+            aggregations = query_plan.get("aggregations", [])
+            if not aggregations:
+                # 기본 집계: sum(amount)
+                aggregations = [{"function": "sum", "field": "amount", "alias": "totalAmount", "displayLabel": "결제 금액 합계", "currency": "USD"}]
+
+            # 1단계: LLM이 모호하다고 판단했는지 확인
+            needs_result_clarification = query_plan.get("needs_result_clarification", False)
+            logger.info(f"[{request_id}] 1st stage LLM decision (aggregate): needs_result_clarification={needs_result_clarification}")
+
+            # 2단계: 다중 결과 + 1단계가 False면 상위 모델로 재판단
+            if len(result_messages) > 1 and not needs_result_clarification:
+                logger.info(f"[{request_id}] Multiple results but 1st stage said no clarification, invoking 2nd stage check...")
+
+                # 결과 요약 생성
+                result_summaries = []
+                for msg_idx, msg in result_messages:
+                    entity = msg.queryPlan.get("entity", "unknown") if msg.queryPlan else "unknown"
+                    count = 0
+                    if msg.queryResult:
+                        if isinstance(msg.queryResult, dict):
+                            count = msg.queryResult.get("totalCount", msg.queryResult.get("metadata", {}).get("rowsReturned", 0))
+                    filters_str = ""
+                    if msg.queryPlan and msg.queryPlan.get("filters"):
+                        filters_str = ", ".join([f"{f.get('field')}={f.get('value')}" for f in msg.queryPlan.get("filters", [])[:2]])
+                    result_summaries.append({"entity": entity, "count": count, "filters": filters_str})
+
+                # 2단계 LLM 판단 호출
+                needs_result_clarification = await query_planner.check_clarification_needed(
+                    user_message=request.message,
+                    result_summaries=result_summaries,
+                    query_intent=query_intent
+                )
+                logger.info(f"[{request_id}] 2nd stage LLM decision (aggregate): needs_result_clarification={needs_result_clarification}")
+
+            if len(result_messages) > 1 and needs_result_clarification:
+                # 다중 결과 + LLM이 모호하다고 판단: clarification 요청
+                recent_results = result_messages[-5:]  # 최근 5개만
+                options = []
+                indices = []
+
+                for idx, (msg_idx, msg) in enumerate(reversed(recent_results)):
+                    entity = msg.queryPlan.get("entity", "데이터") if msg.queryPlan else "데이터"
+                    count = "?"
+                    if msg.queryResult:
+                        if isinstance(msg.queryResult, dict):
+                            count = msg.queryResult.get("totalCount", msg.queryResult.get("metadata", {}).get("rowsReturned", "?"))
+                    time_str = msg.timestamp[-8:-3] if msg.timestamp and len(msg.timestamp) >= 8 else ""
+
+                    label = f"직전: {entity} {count}건 ({time_str})" if idx == 0 else f"{entity} {count}건 ({time_str})"
+                    options.append(label)
+                    indices.append(msg_idx)
+
+                logger.info(f"[{request_id}] Multiple results found, requesting clarification for aggregation")
+
+                clarification_render_spec = {
+                    "type": "clarification",
+                    "clarification": {
+                        "question": "어떤 데이터를 기준으로 집계할까요?",
+                        "options": options
+                    },
+                    "metadata": {
+                        "requestId": request_id,
+                        "targetResultIndices": indices,
+                        "pendingAggregations": aggregations,
+                        "aggregationType": "aggregate_local",
+                        "generatedAt": datetime.utcnow().isoformat() + "Z"
+                    }
+                }
+
+                return ChatResponse(
+                    request_id=request_id,
+                    render_spec=clarification_render_spec,
+                    query_result=None,
+                    query_plan={**query_plan, "needs_clarification": True, "requestId": request_id},
+                    ai_message="어떤 데이터를 기준으로 집계할까요?",
+                    timestamp=datetime.utcnow().isoformat() + "Z"
+                )
+
+            # 결과가 1개 이하: 클라이언트에서 집계하도록 응답
+            target_index = result_messages[-1][0] if result_messages else -1
+            logger.info(f"[{request_id}] Single result, returning aggregate_local response (target: {target_index})")
+
+            aggregate_local_render_spec = {
+                "type": "aggregate_local",
+                "aggregations": aggregations,
+                "targetResultIndex": target_index,
+                "metadata": {
+                    "requestId": request_id,
+                    "generatedAt": datetime.utcnow().isoformat() + "Z"
+                }
+            }
+
+            return ChatResponse(
+                request_id=request_id,
+                render_spec=aggregate_local_render_spec,
+                query_result=None,
+                query_plan={**query_plan, "requestId": request_id},
+                ai_message="이전 결과에서 집계합니다.",
+                timestamp=datetime.utcnow().isoformat() + "Z"
+            )
+        elif query_intent == "direct_answer":
+            # LLM이 직접 답변: DB 조회 없이 텍스트 응답
+            direct_answer = query_plan.get("direct_answer", "")
+            logger.info(f"[{request_id}] Intent: direct_answer, returning LLM response")
+
+            if not direct_answer:
+                direct_answer = "죄송합니다. 답변을 생성하지 못했습니다."
+
+            direct_answer_render_spec = {
+                "type": "text",
+                "title": "분석 결과",
+                "text": {
+                    "content": direct_answer,
+                    "format": "markdown"
+                },
+                "metadata": {
+                    "requestId": request_id,
+                    "generatedAt": datetime.utcnow().isoformat() + "Z"
+                }
+            }
+
+            return ChatResponse(
+                request_id=request_id,
+                render_spec=direct_answer_render_spec,
+                query_result=None,
+                query_plan={**query_plan, "requestId": request_id},
+                ai_message=direct_answer,
+                timestamp=datetime.utcnow().isoformat() + "Z"
+            )
+        else:
+            logger.info(f"[{request_id}] Intent: new_query, no filter merge")
+
         query_plan["requestId"] = request_id
 
         processing_info["stages"].append({
@@ -75,7 +559,46 @@ async def chat(request: ChatRequest):
             "status": "success"
         })
 
-        logger.info(f"[{request_id}] Generated QueryPlan: {query_plan}")
+        logger.info(f"[{request_id}] Final QueryPlan: {query_plan}")
+
+        # Clarification 필요 시 쿼리 실행 없이 대화형 질문 반환
+        if query_plan.get("needs_clarification"):
+            question = query_plan.get("clarification_question", "어떤 데이터를 조회하시겠습니까?")
+            logger.info(f"[{request_id}] Clarification needed: {question}")
+
+            # 대화형 텍스트로 응답 (버튼 없이)
+            clarification_render_spec = {
+                "type": "text",
+                "title": "추가 정보 필요",
+                "text": {
+                    "content": question,
+                    "format": "plain"
+                },
+                "metadata": {
+                    "requestId": request_id,
+                    "generatedAt": datetime.utcnow().isoformat() + "Z"
+                }
+            }
+
+            clarification_query_result = {
+                "requestId": request_id,
+                "status": "pending",
+                "data": {"rows": [], "aggregations": {}},
+                "metadata": {
+                    "executionTimeMs": int((datetime.utcnow() - start_time).total_seconds() * 1000),
+                    "rowsReturned": 0,
+                    "dataSource": "clarification_required"
+                }
+            }
+
+            return ChatResponse(
+                request_id=request_id,
+                render_spec=clarification_render_spec,
+                query_result=clarification_query_result,
+                query_plan=query_plan,
+                ai_message=question,
+                timestamp=datetime.utcnow().isoformat() + "Z"
+            )
 
         # Stage 2: Call Core API
         stage_start = datetime.utcnow()
@@ -107,11 +630,12 @@ async def chat(request: ChatRequest):
         logger.info(f"[{request_id}] Completed in {total_time}ms")
 
         return ChatResponse(
+            request_id=request_id,
             render_spec=render_spec,
-            query_plan=query_plan,
-            conversation_id=conversation_id,
-            original_message=request.message,
-            processing_info=processing_info
+            query_result=query_result,
+            query_plan=query_plan,  # 후속 질문에서 이전 쿼리 조건 참조용
+            ai_message=f"'{request.message}'에 대한 결과입니다.",
+            timestamp=datetime.utcnow().isoformat() + "Z"
         )
 
     except Exception as e:
@@ -145,12 +669,36 @@ async def chat(request: ChatRequest):
             }
         }
 
+        # 에러 시 빈 QueryResult 반환
+        error_query_result = {
+            "requestId": request_id,
+            "status": "error",
+            "data": {"rows": [], "aggregations": {}},
+            "metadata": {
+                "executionTimeMs": total_time,
+                "rowsReturned": 0,
+                "totalRows": 0,
+                "dataSource": "error"
+            },
+            "error": {
+                "code": "PROCESSING_ERROR",
+                "message": str(e)
+            }
+        }
+
+        # 에러 시 빈 QueryPlan 반환
+        error_query_plan = {
+            "entity": "",
+            "operation": "list"
+        }
+
         return ChatResponse(
+            request_id=request_id,
             render_spec=error_render_spec,
-            query_plan={"error": str(e)},
-            conversation_id=conversation_id,
-            original_message=request.message,
-            processing_info=processing_info
+            query_result=error_query_result,
+            query_plan=error_query_plan,
+            ai_message=f"요청 처리 중 오류가 발생했습니다: {str(e)}",
+            timestamp=datetime.utcnow().isoformat() + "Z"
         )
 
 
@@ -221,9 +769,17 @@ async def get_config():
     return {
         "core_api_url": CORE_API_URL,
         "openai_api_key_set": bool(os.getenv("OPENAI_API_KEY")),
+        "anthropic_api_key_set": bool(os.getenv("ANTHROPIC_API_KEY")),
         "rag_enabled": os.getenv("RAG_ENABLED", "true").lower() == "true",
         "database_url_set": bool(os.getenv("DATABASE_URL")),
-        "step": "7-rag-document-search"
+        "query_plan_validation": {
+            "enabled": ENABLE_QUERY_PLAN_VALIDATION,
+            "validator_provider": os.getenv("VALIDATOR_LLM_PROVIDER", "openai"),
+            "validator_model": os.getenv("VALIDATOR_LLM_MODEL", "gpt-4o-mini"),
+            "quality_threshold": float(os.getenv("VALIDATOR_QUALITY_THRESHOLD", "0.8")),
+            "use_llm_validation": os.getenv("VALIDATOR_USE_LLM", "true").lower() == "true"
+        },
+        "step": "8-query-plan-validation"
     }
 
 
