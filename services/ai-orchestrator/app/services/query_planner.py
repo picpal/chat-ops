@@ -150,6 +150,29 @@ class QueryPlan(BaseModel):
 
 
 # ============================================
+# Intent Classification (2단계 분류용)
+# ============================================
+
+class IntentType(str, Enum):
+    """1단계 분류: 질문 유형"""
+    DIRECT_ANSWER = "direct_answer"    # 단순 계산/설명 → LLM 직접 답변
+    QUERY_NEEDED = "query_needed"      # DB 조회 필요 → QueryPlan 생성
+    FILTER_LOCAL = "filter_local"      # 이전 결과 필터링
+    AGGREGATE_LOCAL = "aggregate_local"  # 이전 결과 집계
+
+
+class IntentClassification(BaseModel):
+    """1단계 Intent 분류 결과"""
+    intent: IntentType = Field(description="분류된 의도")
+    confidence: float = Field(description="확신도 (0.0 ~ 1.0)")
+    reasoning: str = Field(description="판단 근거 (간단히)")
+    direct_answer_text: Optional[str] = Field(
+        default=None,
+        description="intent가 direct_answer일 때, 생성된 답변"
+    )
+
+
+# ============================================
 # Entity Schema Information (for Prompt)
 # ============================================
 
@@ -370,6 +393,162 @@ class QueryPlannerService:
 
         logger.info(f"Using Clarification LLM: {clarification_model}")
         return llm
+
+    async def classify_intent(
+        self,
+        user_message: str,
+        conversation_context: str,
+        previous_results: List[Dict[str, Any]]
+    ) -> IntentClassification:
+        """
+        1단계 분류: 사용자 질문의 의도를 먼저 분류
+
+        Args:
+            user_message: 사용자 입력 메시지
+            conversation_context: 이전 대화 컨텍스트 (build_conversation_context 결과)
+            previous_results: 이전 조회 결과 요약 목록
+
+        Returns:
+            IntentClassification: 분류 결과 (intent, confidence, reasoning, direct_answer_text)
+        """
+        import time
+        start_time = time.time()
+
+        llm = self._get_llm()  # 가벼운 모델 사용
+
+        # 이전 결과 요약 생성 (실제 금액 데이터 포함)
+        results_summary = ""
+        latest_amount = None  # 가장 최근 금액 (계산용)
+
+        if previous_results:
+            results_summary = "\n### 이전 조회 결과:\n"
+            for i, r in enumerate(previous_results):
+                entity = r.get("entity", "unknown")
+                count = r.get("count", 0)
+                aggregation = r.get("aggregation", "")
+                total_amount = r.get("total_amount")
+                data_summary = r.get("data_summary", "")
+
+                results_summary += f"- 결과 #{i+1}: {entity} {count}건"
+
+                # 실제 금액 데이터 포함
+                if total_amount:
+                    results_summary += f" | **금액 합계: ${total_amount:,.0f}**"
+                    latest_amount = total_amount  # 가장 최근 금액 저장
+
+                if aggregation:
+                    results_summary += f" | 집계 결과: {aggregation}"
+
+                if data_summary and not total_amount:
+                    results_summary += f" | {data_summary}"
+
+                results_summary += "\n"
+
+            # 가장 최근 금액 강조
+            if latest_amount:
+                results_summary += f"\n⚠️ **계산에 사용할 금액: ${latest_amount:,.0f}**\n"
+                results_summary += "이 금액을 기준으로 수수료, 나눗셈 등 계산을 수행하세요!\n"
+
+        classification_prompt = f"""당신은 사용자 질문의 의도를 분류하는 AI입니다.
+
+{conversation_context}
+{results_summary}
+
+## 사용자 질문
+"{user_message}"
+
+## 분류 기준
+
+### 1. direct_answer (LLM 직접 답변) - 우선 체크!
+다음 경우 **반드시** direct_answer 선택:
+- 이전 결과에 대한 **산술 연산** (%, 나누기, 곱하기, 더하기, 빼기)
+- "수수료 X% 적용", "VAT 계산", "X로 나누면", "평균 계산"
+- 단순 설명 요청 ("이게 뭐야?", "설명해줘")
+- **이미 집계 결과가 있고** 그에 대한 추가 계산 요청
+
+**예시:**
+| 상황 | 질문 | 분류 |
+|------|------|------|
+| 합계 $1,949,000 있음 | "수수료 0.6% 적용해줘" | direct_answer |
+| 합계 있음 | "5로 나누면?" | direct_answer |
+| 합계 있음 | "VAT 10% 포함하면?" | direct_answer |
+| 결과 있음 | "이게 무슨 의미야?" | direct_answer |
+
+### 2. filter_local (클라이언트 필터링)
+- "이중에", "여기서", "~만" 등으로 **기존 결과를 필터링**
+- DB 재조회 없이 클라이언트에서 처리
+
+### 3. aggregate_local (클라이언트 집계) - 중요!
+- "합산", "합계", "평균", "건수", "총액" 등 **테이블 결과를 집계**
+- 이전에 **테이블(목록) 결과**가 있고, 그것을 집계하는 요청 → aggregate_local
+- 예: "금액 합산해줘", "총액 계산", "몇 건이야?"
+- ⚠️ 집계 결과가 아직 없으면 **절대 direct_answer가 아님!**
+
+### 4. query_needed (DB 조회 필요)
+- 새로운 데이터 조회 필요
+- "최근 거래 30건", "환불 내역 조회"
+
+## 중요한 판단 규칙 - 반드시 순서대로 확인!
+
+**Step 1**: 이전 결과가 **테이블(목록)**인가, **집계 결과(텍스트)**인가?
+- 테이블이면 → "합산", "평균" 요청 시 **aggregate_local**
+- 집계 결과(예: "결제 금액 합계: $5,000,000")이면 → 추가 계산 시 **direct_answer**
+
+**Step 2**: direct_answer 조건 (모두 충족해야 함!)
+1. 이미 **집계 결과(숫자가 포함된 텍스트)**가 있어야 함
+2. 그 숫자에 대한 추가 계산 요청 (%, 나누기, 곱하기)
+3. 예: "수수료 0.6%", "5로 나누면?", "VAT 10%"
+
+**Step 3**: aggregate_local 조건
+1. 이전에 **테이블/목록 결과**가 있음
+2. "합산", "합계", "평균", "건수" 등 기본 집계 요청
+3. 아직 집계가 수행되지 않은 상태
+
+## ⚠️ 매우 중요: direct_answer_text 생성 규칙
+intent가 "direct_answer"이면 **반드시** direct_answer_text에 계산된 답변을 작성하세요!
+
+**예시 (집계 결과: 결제 금액 합계: $5,035,000):**
+- 질문: "수수료 0.6% 적용해서 수수료와 순금액 보여줘"
+- direct_answer_text 예시:
+  "결제 금액 **$5,035,000** 기준:
+  - **수수료 (0.6%)**: $30,210
+  - **수수료 제외 금액**: $5,004,790"
+
+- 질문: "5로 나누면?"
+- direct_answer_text 예시:
+  "$5,035,000을 5로 나누면 **$1,007,000**입니다."
+
+**절대 direct_answer_text를 null로 두지 마세요! 반드시 계산 결과를 포함하세요.**
+
+응답은 반드시 JSON 형식으로:
+{{
+    "intent": "direct_answer" | "query_needed" | "filter_local" | "aggregate_local",
+    "confidence": 0.0 ~ 1.0,
+    "reasoning": "판단 근거 (1-2문장)",
+    "direct_answer_text": "direct_answer인 경우 **반드시 계산된 답변** 작성, 다른 intent면 null"
+}}
+"""
+
+        try:
+            # Structured output 사용
+            structured_llm = llm.with_structured_output(IntentClassification)
+            result = await structured_llm.ainvoke(classification_prompt)
+
+            elapsed = int((time.time() - start_time) * 1000)
+            logger.info(f"[Intent Classification] intent={result.intent}, confidence={result.confidence:.2f}, time={elapsed}ms")
+            logger.info(f"[Intent Classification] reasoning: {result.reasoning}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Intent classification failed: {e}")
+            # 실패 시 기본값: query_needed
+            return IntentClassification(
+                intent=IntentType.QUERY_NEEDED,
+                confidence=0.5,
+                reasoning=f"Classification failed: {str(e)}",
+                direct_answer_text=None
+            )
 
     async def check_clarification_needed(
         self,
@@ -775,6 +954,11 @@ clarification이 필요하면 "YES", 필요 없으면 "NO"만 응답하세요.
 | "5로 나누면?" | 집계 결과 $1,451,000 | "결제 금액 합계 $1,451,000을 5로 나누면 **$290,200**입니다." |
 | "반으로 나누면?" | 집계 결과 $1,451,000 | "$1,451,000의 절반은 **$725,500**입니다." |
 | "10% 수수료 빼면?" | 집계 결과 $1,451,000 | "10% 수수료($145,100)를 제외하면 **$1,305,900**입니다." |
+| "수수료 0.6% 적용해서 수수료와 순금액 보여줘" | 집계 결과 $1,949,000 | "결제 금액 $1,949,000 기준:\n- **수수료 (0.6%)**: $11,694\n- **수수료 제외 금액**: $1,937,306" |
+| "결제금액에 수수료 0.6% 적용해서 보여줘" | 집계 결과 $1,949,000 | "결제 금액 $1,949,000에 0.6% 수수료 적용:\n- **수수료**: $11,694\n- **순 금액**: $1,937,306" |
+| "VAT 10% 계산해줘" | 집계 결과 $1,000,000 | "금액 $1,000,000 기준:\n- **VAT (10%)**: $100,000\n- **VAT 포함 금액**: $1,100,000" |
+
+**중요**: "보여줘", "알려줘", "계산해줘" 같은 표현이 있어도, 이미 조회된 결과에 대한 **백분율/수수료/세금 계산**은 direct_answer입니다!
 
 ### 의도 분류 예시
 | 사용자 입력 | 대화 컨텍스트 | query_intent |

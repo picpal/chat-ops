@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any, List
 import httpx
 import logging
 import os
+import re
 import uuid
 from datetime import datetime
 
@@ -138,6 +139,117 @@ def get_previous_query_plan(history: List["ChatMessageItem"]) -> Optional[Dict[s
     return None
 
 
+def extract_previous_results(history: List["ChatMessageItem"]) -> List[Dict[str, Any]]:
+    """이전 대화에서 조회/집계 결과 요약 추출 (Intent Classification용)
+
+    실제 데이터 값도 추출하여 LLM이 계산할 수 있도록 함
+    """
+    results = []
+    if not history:
+        return results
+
+    for i, msg in enumerate(history):
+        if msg.role == "assistant":
+            result_info = {
+                "index": i,
+                "entity": None,
+                "count": 0,
+                "aggregation": None,
+                "data_summary": None,  # 실제 데이터 요약
+                "total_amount": None   # 금액 합계 (있는 경우)
+            }
+
+            # QueryResult가 있으면 조회 결과
+            if msg.queryResult:
+                logger.info(f"[extract_previous_results] msg #{i} has queryResult with keys: {list(msg.queryResult.keys())}")
+                result_info["count"] = msg.queryResult.get("totalCount", 0)
+                if msg.queryPlan:
+                    result_info["entity"] = msg.queryPlan.get("entity", "unknown")
+
+                # 실제 데이터에서 금액 합계 추출
+                data_obj = msg.queryResult.get("data", {})
+                # data is an object with 'rows' property according to query-result.schema.json
+                rows = data_obj.get("rows", []) if isinstance(data_obj, dict) else []
+                logger.info(f"[extract_previous_results] msg #{i} rows length: {len(rows) if rows else 0}")
+
+                if rows:
+                    # amount 필드가 있으면 합계 계산
+                    amounts = []
+                    for row_idx, row in enumerate(rows):
+                        if isinstance(row, dict):
+                            logger.info(f"[extract_previous_results] msg #{i} row #{row_idx} keys: {list(row.keys())}")
+                            # amount, totalAmount, 금액 등 다양한 필드명 체크
+                            for field in ["amount", "totalAmount", "total_amount", "price", "금액"]:
+                                if field in row and row[field] is not None:
+                                    try:
+                                        amounts.append(float(row[field]))
+                                        logger.info(f"[extract_previous_results] msg #{i} row #{row_idx} found {field}={row[field]}")
+                                    except (ValueError, TypeError) as e:
+                                        logger.info(f"[extract_previous_results] msg #{i} row #{row_idx} error converting {field}: {e}")
+                                        pass
+                                    break
+                        else:
+                            logger.info(f"[extract_previous_results] msg #{i} row #{row_idx} is not a dict: {type(row)}")
+
+                    if amounts:
+                        result_info["total_amount"] = sum(amounts)
+                        result_info["data_summary"] = f"금액 합계: ${result_info['total_amount']:,.0f} ({len(amounts)}건)"
+                        logger.info(f"[extract_previous_results] msg #{i} extracted total_amount: ${result_info['total_amount']:,.0f} from {len(amounts)} amounts")
+                    else:
+                        logger.info(f"[extract_previous_results] msg #{i} no amounts found in {len(data)} rows")
+
+            # RenderSpec이 text 타입이면 집계 결과일 수 있음
+            if msg.renderSpec and msg.renderSpec.get("type") == "text":
+                text_content = msg.renderSpec.get("text", {}).get("content", "")
+                if text_content:
+                    result_info["aggregation"] = text_content
+
+                    # 텍스트에서 금액 추출 (우선순위: 괄호 안 전체 금액 > 축약 금액)
+                    if result_info["total_amount"] is None:
+                        # 1순위: 괄호 안의 전체 금액 (예: "$2.88M ($2,878,000)" → 2878000)
+                        full_amount_match = re.search(r'\(\$?([\d,]+)\)', text_content)
+                        if full_amount_match:
+                            try:
+                                result_info["total_amount"] = float(full_amount_match.group(1).replace(',', ''))
+                                logger.info(f"[extract_previous_results] Extracted full amount from parens: ${result_info['total_amount']:,.0f}")
+                            except ValueError:
+                                pass
+
+                        # 2순위: M/K 접미사 처리 (예: "$2.88M" → 2880000)
+                        if result_info["total_amount"] is None:
+                            abbrev_match = re.search(r'\$?([\d,]+(?:\.\d+)?)\s*([MK])', text_content)
+                            if abbrev_match:
+                                try:
+                                    value = float(abbrev_match.group(1).replace(',', ''))
+                                    suffix = abbrev_match.group(2)
+                                    if suffix == 'M':
+                                        value *= 1_000_000
+                                    elif suffix == 'K':
+                                        value *= 1_000
+                                    result_info["total_amount"] = value
+                                    logger.info(f"[extract_previous_results] Extracted abbreviated amount: ${result_info['total_amount']:,.0f}")
+                                except ValueError:
+                                    pass
+
+                        # 3순위: 일반 금액 (예: "$1,234,567")
+                        if result_info["total_amount"] is None:
+                            simple_match = re.search(r'\$?([\d,]+(?:\.\d+)?)', text_content)
+                            if simple_match:
+                                try:
+                                    result_info["total_amount"] = float(simple_match.group(1).replace(',', ''))
+                                    logger.info(f"[extract_previous_results] Extracted simple amount: ${result_info['total_amount']:,.0f}")
+                                except ValueError:
+                                    pass
+
+            # 조회 결과나 집계 결과가 있으면 추가
+            if result_info["count"] > 0 or result_info["aggregation"]:
+                results.append(result_info)
+                logger.info(f"[extract_previous_results] Added result #{len(results)}: entity={result_info['entity']}, count={result_info['count']}, total_amount={result_info['total_amount']}")
+
+    logger.info(f"[extract_previous_results] Total results extracted: {len(results)}")
+    return results
+
+
 def merge_filters(previous_plan: Dict[str, Any], new_plan: Dict[str, Any]) -> Dict[str, Any]:
     """이전 필터와 새 필터를 병합"""
     if not previous_plan:
@@ -175,7 +287,7 @@ def merge_filters(previous_plan: Dict[str, Any], new_plan: Dict[str, Any]) -> Di
 
     return merged_plan
 
-from app.services.query_planner import get_query_planner
+from app.services.query_planner import get_query_planner, IntentType
 from app.services.render_composer import get_render_composer
 from app.services.rag_service import get_rag_service
 
@@ -248,15 +360,62 @@ async def chat(request: ChatRequest):
     }
 
     try:
-        # Stage 1: Natural Language → QueryPlan
+        # Stage 0: Intent Classification (2단계 분류)
         stage_start = datetime.utcnow()
         query_planner = get_query_planner()
 
         # 대화 컨텍스트 빌드
         conversation_context = None
+        previous_results = []
         if request.conversation_history:
             conversation_context = build_conversation_context(request.conversation_history)
+            previous_results = extract_previous_results(request.conversation_history)
             logger.info(f"[{request_id}] Using conversation context with {len(request.conversation_history)} messages")
+            logger.info(f"[{request_id}] Found {len(previous_results)} previous results for intent classification")
+
+        # 1단계: Intent 분류 (가벼운 모델로 빠르게)
+        intent_result = await query_planner.classify_intent(
+            request.message,
+            conversation_context or "",
+            previous_results
+        )
+        logger.info(f"[{request_id}] Intent classification: {intent_result.intent.value}, confidence={intent_result.confidence:.2f}")
+
+        # direct_answer면 바로 응답 반환 (QueryPlan 생성 스킵)
+        if intent_result.intent == IntentType.DIRECT_ANSWER and intent_result.direct_answer_text:
+            logger.info(f"[{request_id}] Direct answer detected, skipping QueryPlan generation")
+            logger.info(f"[{request_id}] Direct answer text: {intent_result.direct_answer_text}")
+
+            return ChatResponse(
+                request_id=request_id,
+                query_plan={
+                    "query_intent": "direct_answer",
+                    "requestId": request_id
+                },
+                query_result=None,
+                render_spec={
+                    "type": "text",
+                    "text": {
+                        "content": intent_result.direct_answer_text,
+                        "format": "markdown"
+                    },
+                    "metadata": {
+                        "intent": "direct_answer",
+                        "confidence": intent_result.confidence,
+                        "reasoning": intent_result.reasoning
+                    }
+                },
+                timestamp=datetime.utcnow().isoformat() + "Z"
+            )
+
+        processing_info["stages"].append({
+            "name": "Intent Classification",
+            "duration": (datetime.utcnow() - stage_start).total_seconds() * 1000,
+            "result": intent_result.intent.value
+        })
+
+        # Stage 1: Natural Language → QueryPlan
+        stage_start = datetime.utcnow()
 
         query_plan = await query_planner.generate_query_plan(
             request.message,
