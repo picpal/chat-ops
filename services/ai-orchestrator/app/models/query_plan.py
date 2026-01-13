@@ -125,6 +125,16 @@ class TimeRange(BaseModel):
     """
 
 
+class PreferredRenderType(Enum):
+    """
+    사용자가 명시적으로 요청한 렌더링 타입
+    """
+
+    table = 'table'
+    chart = 'chart'
+    text = 'text'
+
+
 class QueryPlan(BaseModel):
     """
     AI Orchestrator가 Core API에 전달하는 쿼리 계획
@@ -169,4 +179,8 @@ class QueryPlan(BaseModel):
     time_range: Optional[TimeRange] = Field(None, alias='timeRange')
     """
     시계열 데이터 조회 시 필수 시간 범위
+    """
+    preferred_render_type: Optional[PreferredRenderType] = Field(None, alias='preferredRenderType')
+    """
+    사용자가 명시적으로 요청한 렌더링 타입 (표로, 차트로 등)
     """

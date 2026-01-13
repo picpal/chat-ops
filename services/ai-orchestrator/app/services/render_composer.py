@@ -150,6 +150,28 @@ class RenderComposerService:
     데이터 형태에 따라 적절한 렌더링 타입을 결정
     """
 
+    def _detect_render_type_from_message(self, message: str) -> Optional[str]:
+        """
+        사용자 메시지에서 명시적 렌더링 타입 요청 감지 (하드코딩)
+
+        LLM 판단보다 확실한 키워드 매칭으로 100% 정확도 보장
+        """
+        msg = message.lower()
+
+        # 표/테이블 요청
+        if any(kw in msg for kw in ["표로", "테이블로", "목록으로", "리스트로", "표 형태", "테이블 형태"]):
+            return "table"
+
+        # 차트/그래프 요청
+        if any(kw in msg for kw in ["그래프로", "차트로", "시각화로", "그래프 형태", "차트 형태"]):
+            return "chart"
+
+        # 텍스트 요청
+        if any(kw in msg for kw in ["텍스트로", "글로", "요약으로"]):
+            return "text"
+
+        return None
+
     def compose(
         self,
         query_result: Dict[str, Any],
@@ -174,6 +196,29 @@ class RenderComposerService:
         if status == "error":
             return self._compose_error_spec(query_result, user_message)
 
+        # 1순위: 사용자 메시지에서 직접 감지 (하드코딩 - 100% 정확)
+        detected_render_type = self._detect_render_type_from_message(user_message)
+        if detected_render_type:
+            logger.info(f"Detected render type from message: {detected_render_type}")
+            if detected_render_type == "table":
+                return self._compose_table_spec(query_result, query_plan, user_message)
+            elif detected_render_type == "chart":
+                return self._compose_chart_spec(query_result, query_plan, user_message)
+            elif detected_render_type == "text":
+                return self._compose_text_spec(query_result, query_plan, user_message)
+
+        # 2순위: LLM이 설정한 preferredRenderType
+        preferred_render_type = query_plan.get("preferredRenderType")
+        if preferred_render_type:
+            logger.info(f"Using LLM preferred render type: {preferred_render_type}")
+            if preferred_render_type == "table":
+                return self._compose_table_spec(query_result, query_plan, user_message)
+            elif preferred_render_type == "chart":
+                return self._compose_chart_spec(query_result, query_plan, user_message)
+            elif preferred_render_type == "text":
+                return self._compose_text_spec(query_result, query_plan, user_message)
+
+        # 3순위: 기존 자동 결정 로직
         operation = query_plan.get("operation", "list")
         entity = query_plan.get("entity", "Order")
 

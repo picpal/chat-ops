@@ -147,6 +147,11 @@ class QueryPlan(BaseModel):
         default=None,
         description="query_intent가 direct_answer일 때, LLM이 생성한 답변 텍스트"
     )
+    # 사용자가 명시적으로 요청한 렌더링 타입
+    preferred_render_type: Optional[str] = Field(
+        default=None,
+        description="사용자가 명시한 렌더링 타입: 'table'(표로), 'chart'(그래프로), 'text'(텍스트로). 명시 없으면 null"
+    )
 
 
 # ============================================
@@ -813,6 +818,37 @@ clarification이 필요하면 "YES", 필요 없으면 "NO"만 응답하세요.
 3. 집계 쿼리(aggregate)에서 groupBy 없이 단순 집계만 할 경우 결과는 단일 값
 4. 가맹점ID나 주문번호가 구체적으로 명시되면 해당 값으로 필터링
 
+## 렌더링 타입 (preferredRenderType) - 매우 중요!
+
+사용자가 특정 렌더링 형식을 명시적으로 요청하면 반드시 **preferredRenderType** 필드를 설정하세요:
+
+### 키워드 → preferredRenderType 매핑
+
+| 사용자 표현 | preferredRenderType |
+|------------|---------------------|
+| "표로", "테이블로", "목록으로", "리스트로" | "table" |
+| "그래프로", "차트로", "그림으로", "시각화로" | "chart" |
+| "텍스트로", "글로", "요약으로" | "text" |
+
+### 예시
+
+**예시 1: 표로 요청**
+- 입력: "최근 3개월 거래를 가맹점별로 그룹화해서 **표로** 보여줘"
+- 결과: operation=aggregate, groupBy=["merchantId"], **preferredRenderType="table"**
+
+**예시 2: 차트로 요청**
+- 입력: "결제 현황을 **그래프로** 보여줘"
+- 결과: operation=aggregate, **preferredRenderType="chart"**
+
+**예시 3: 명시 없음**
+- 입력: "최근 결제 내역 조회해줘"
+- 결과: operation=list, **preferredRenderType 생략** (시스템이 자동 결정)
+
+### 중요 규칙
+- 사용자가 "표로"라고 명시하면 groupBy가 있더라도 **반드시 preferredRenderType="table"** 설정
+- 사용자가 렌더링 타입을 명시하지 않으면 preferredRenderType 필드를 생략 (시스템이 자동 결정)
+- preferredRenderType은 operation과 독립적 (aggregate 작업도 표로 표시 가능)
+
 ## 쿼리 의도 분류 (query_intent) - 매우 중요!
 
 모든 요청에 **query_intent** 필드를 반드시 설정하세요:
@@ -1249,6 +1285,10 @@ clarification이 필요하면 "YES", 필요 없으면 "NO"만 응답하세요.
                 "end": plan.time_range.end
             }
         # limit이 있으면 timeRange 없이도 동작 (ORDER BY + LIMIT으로 최신 N건 조회)
+
+        # 사용자가 명시한 렌더링 타입 (표로, 차트로 등)
+        if plan.preferred_render_type:
+            result["preferredRenderType"] = plan.preferred_render_type
 
         return result
 

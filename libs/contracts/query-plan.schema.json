@@ -129,6 +129,11 @@
           "description": "종료 시간 (ISO 8601)"
         }
       }
+    },
+    "preferredRenderType": {
+      "type": "string",
+      "description": "사용자가 명시적으로 요청한 렌더링 타입 (표로, 차트로, 그래프로 등)",
+      "enum": ["table", "chart", "text"]
     }
   }
 }

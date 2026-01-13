@@ -196,7 +196,7 @@ def extract_previous_results(history: List["ChatMessageItem"]) -> List[Dict[str,
                         result_info["data_summary"] = f"금액 합계: ${result_info['total_amount']:,.0f} ({len(amounts)}건)"
                         logger.info(f"[extract_previous_results] msg #{i} extracted total_amount: ${result_info['total_amount']:,.0f} from {len(amounts)} amounts")
                     else:
-                        logger.info(f"[extract_previous_results] msg #{i} no amounts found in {len(data)} rows")
+                        logger.info(f"[extract_previous_results] msg #{i} no amounts found in {len(rows)} rows")
 
             # RenderSpec이 text 타입이면 집계 결과일 수 있음
             if msg.renderSpec and msg.renderSpec.get("type") == "text":
