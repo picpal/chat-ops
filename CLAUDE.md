@@ -74,3 +74,39 @@ See: infra/docker/.env.example
 - CORS: use infra/docker/nginx as reverse proxy (preferred)
 - Migration errors: check Flyway logs and db/migration order
 - Slow queries: ensure time range filter + limit are enforced
+
+## 8. Agent 사용 가이드
+
+프로젝트에 설정된 에이전트를 적극 활용하세요.
+
+### 에이전트 목록 및 사용 시점
+
+| 에이전트 | 용도 | 사용 시점 |
+|---------|------|----------|
+| server-ops-controller | 서버 시작/중지/재시작/상태확인 | 개발 시작/종료, 서비스 문제 발생 시 |
+| ui-e2e-tester | UI 기능 테스트 (Playwright) | UI 기능 구현 완료 후 검증 |
+| log-analyzer | 로그 분석 및 디버깅 | 오류 발생 시, 동작 확인 필요 시 |
+| frontend-developer | React UI 개발 | 프론트엔드 컴포넌트/페이지 작업 |
+| project-doc-writer | 문서 작성 | 개발 계획서, ADR, 기술 문서 작성 |
+| work-logger | 작업 기록 | 작업 완료 후 기록 필요 시 |
+| file-explorer | 파일 탐색 | 코드베이스 구조 파악, 파일 찾기 |
+
+### 워크플로우 예시
+
+1. **개발 시작**: server-ops-controller로 서버 시작
+2. **기능 개발**: frontend-developer (UI) 또는 직접 수정 (백엔드)
+3. **테스트**: ui-e2e-tester로 E2E 테스트
+4. **오류 발생**: log-analyzer로 로그 분석
+5. **문서화**: project-doc-writer로 문서 작성
+6. **개발 종료**: server-ops-controller로 서버 중지
+
+### 주의사항
+
+- **AI Orchestrator 코드 수정 후**: `docker restart`가 아닌 Docker rebuild 필요
+  ```bash
+  docker-compose -f infra/docker/docker-compose.yml build ai-orchestrator
+  docker-compose -f infra/docker/docker-compose.yml up -d ai-orchestrator
+  ```
+- **E2E 테스트 전**: 모든 서비스(UI, AI, Core API, DB) 실행 확인
+- **check-point 기록**: 주요 구현 완료 시 check-point/ 폴더에 문서화
+- **test-scenarios 기록**: 테스트 시나리오는 test-scenarios/ 폴더에 저장
