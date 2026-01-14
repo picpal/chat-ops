@@ -91,7 +91,7 @@ See: infra/docker/.env.example
 
 | 질문 | Yes → 에이전트 사용 |
 |------|---------------------|
-| 코드 수정 후 테스트가 필요한가? | `backend-api-tester`, `ui-e2e-tester` |
+| 코드 수정 후 테스트가 필요한가? | `tester` |
 | 특정 서비스(AI/Core API/UI) 코드를 수정하는가? | `ai-orchestrator-dev`, `core-api-dev`, `frontend-developer` |
 | 서버 상태 확인/제어가 필요한가? | `server-ops-controller` |
 | 오류 원인 파악이 필요한가? | `log-analyzer` |
@@ -121,8 +121,7 @@ See: infra/docker/.env.example
 | server-ops-controller | 서버 시작/중지/재시작/상태확인 | 개발 시작/종료, 서비스 문제 발생 시 |
 | ai-orchestrator-dev | AI Orchestrator (Python/FastAPI) 개발 | LLM 프롬프트, Text-to-SQL, RAG, SQL Validator 작업 |
 | core-api-dev | Core API (Java/Spring Boot) 개발 | REST API, QueryPlan 검증, SQL Builder, DB 마이그레이션 |
-| backend-api-tester | 백엔드 API 테스트 | 단위/통합 테스트, API 검증 (E2E 제외) |
-| ui-e2e-tester | UI 기능 테스트 (Playwright) | UI 기능 구현 완료 후 검증 |
+| tester | 전체 테스트 관할 (Python/Java/React) | 코드 수정 후 테스트 실행, E2E 테스트 |
 | log-analyzer | 로그 분석 및 디버깅 | 오류 발생 시, 동작 확인 필요 시 |
 | frontend-developer | React UI 개발 | 프론트엔드 컴포넌트/페이지 작업 |
 | project-doc-writer | 문서 작성 | 개발 계획서, ADR, 기술 문서 작성 |
@@ -136,7 +135,7 @@ See: infra/docker/.env.example
 |------|----------|------|
 | 1. 서버 시작 | `server-ops-controller` | O |
 | 2. UI 컴포넌트 작업 | `frontend-developer` | O |
-| 3. E2E 테스트 | `ui-e2e-tester` | O |
+| 3. 테스트 실행 | `tester` | O |
 | 4. 오류 분석 (필요시) | `log-analyzer` | - |
 | 5. 문서화 (필요시) | `project-doc-writer` | - |
 | 6. 서버 중지 | `server-ops-controller` | O |
@@ -147,7 +146,7 @@ See: infra/docker/.env.example
 | 1. 서버 시작 | `server-ops-controller` | O |
 | 2. AI Orchestrator 작업 | `ai-orchestrator-dev` | O |
 | 3. Core API 작업 | `core-api-dev` | O |
-| 4. 테스트 실행 | `backend-api-tester` | O |
+| 4. 테스트 실행 | `tester` | O |
 | 5. 오류 분석 (필요시) | `log-analyzer` | - |
 | 6. 서버 중지 | `server-ops-controller` | O |
 
