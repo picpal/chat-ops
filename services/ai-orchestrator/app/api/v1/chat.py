@@ -1225,6 +1225,7 @@ def compose_sql_render_spec(result: Dict[str, Any], question: str) -> Dict[str, 
         column_defs = []
         for col in columns:
             col_def = {
+                "key": col,  # UI TableRenderer 호환
                 "field": col,
                 "headerName": col.replace("_", " ").title()
             }
