@@ -1,10 +1,21 @@
 export type RenderSpecType = 'table' | 'text' | 'chart' | 'log' | 'composite' | 'clarification' | 'filter_local' | 'aggregate_local'
 
+// Server-side pagination info (added by RenderComposer)
+export interface ServerPaginationInfo {
+  queryToken: string
+  hasMore: boolean
+  currentPage: number
+  totalRows?: number
+  totalPages?: number
+  pageSize?: number
+}
+
 export interface BaseRenderSpec {
   type: RenderSpecType
   requestId: string
   title?: string
   description?: string
+  pagination?: ServerPaginationInfo // Server-side pagination metadata
 }
 
 // Table Renderer Types

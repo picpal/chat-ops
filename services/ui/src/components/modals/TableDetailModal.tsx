@@ -1,44 +1,86 @@
-import React, { useState, useMemo } from 'react'
-import { useModal } from '@/hooks'
+import React, { useState, useMemo, useEffect } from 'react'
+import { useModal, useServerPagination } from '@/hooks'
 import { Icon, Badge } from '@/components/common'
 import { formatCurrency, formatDate, cn } from '@/utils'
 import { TableRenderSpec, TableColumn } from '@/types/renderSpec'
 
 const ROWS_PER_PAGE = 10
 
+interface ServerPaginationInfo {
+  queryToken?: string
+  totalRows?: number
+  totalPages?: number
+  pageSize?: number
+  hasMore?: boolean
+}
+
 const TableDetailModal: React.FC = () => {
   const { isOpen, type, data, close } = useModal()
-  const [currentPage, setCurrentPage] = useState(1)
+  const [clientPage, setClientPage] = useState(1)
 
   // Extract modal data
   const modalData = data as {
     spec: TableRenderSpec
     rows: any[]
+    serverPagination?: ServerPaginationInfo
   } | undefined
 
   const spec = modalData?.spec
-  const rows = modalData?.rows || []
+  const initialRows = modalData?.rows || []
+  const serverPagination = modalData?.serverPagination
 
   // Extract table config with fallback
   const tableConfig = spec?.table || { columns: [], dataRef: 'data.rows' }
   const columns = tableConfig.columns || []
 
-  // Pagination
-  const totalPages = Math.ceil(rows.length / ROWS_PER_PAGE)
-  const paginatedRows = useMemo(() => {
-    const start = (currentPage - 1) * ROWS_PER_PAGE
-    return rows.slice(start, start + ROWS_PER_PAGE)
-  }, [rows, currentPage])
+  // Determine if we should use server-side pagination
+  // CHANGED: Disable server-side pagination in detail modal
+  // The detail modal should show only the requested data (e.g., "30건 보여줘" → only 30 rows)
+  // NOT the entire database. Server pagination would show all 1000 rows.
+  const useServerSide = false
+
+  // Server pagination hook
+  const serverPaginationHook = useServerPagination({
+    queryToken: serverPagination?.queryToken,
+    totalRows: serverPagination?.totalRows || 0,
+    pageSize: serverPagination?.pageSize || ROWS_PER_PAGE,
+    initialRows: initialRows,
+  })
+
+  // Client-side pagination (fallback)
+  const clientTotalPages = Math.ceil(initialRows.length / ROWS_PER_PAGE)
+  const clientPaginatedRows = useMemo(() => {
+    const start = (clientPage - 1) * ROWS_PER_PAGE
+    return initialRows.slice(start, start + ROWS_PER_PAGE)
+  }, [initialRows, clientPage])
+
+  // Choose which pagination to use
+  const currentPage = useServerSide ? serverPaginationHook.currentPage : clientPage
+  const totalPages = useServerSide ? serverPaginationHook.totalPages : clientTotalPages
+  const totalRows = useServerSide ? serverPaginationHook.totalRows : initialRows.length
+  const displayRows = useServerSide ? serverPaginationHook.rows : clientPaginatedRows
+  const isLoading = useServerSide ? serverPaginationHook.isLoading : false
+
+  const goToPage = (page: number) => {
+    if (useServerSide) {
+      serverPaginationHook.goToPage(page)
+    } else {
+      setClientPage(page)
+    }
+  }
 
   // Reset page when modal opens
-  React.useEffect(() => {
+  useEffect(() => {
     if (isOpen && type === 'tableDetail') {
-      setCurrentPage(1)
+      setClientPage(1)
+      if (useServerSide) {
+        serverPaginationHook.goToPage(1)
+      }
     }
   }, [isOpen, type])
 
   // ESC key handler
-  React.useEffect(() => {
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') close()
     }
@@ -88,6 +130,10 @@ const TableDetailModal: React.FC = () => {
     }
     return pages
   }
+
+  // Calculate display range
+  const startRow = (currentPage - 1) * ROWS_PER_PAGE + 1
+  const endRow = Math.min(currentPage * ROWS_PER_PAGE, totalRows)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
@@ -142,6 +188,16 @@ const TableDetailModal: React.FC = () => {
 
         {/* Table Content */}
         <div className="flex-1 overflow-auto bg-slate-50/30 p-0 relative">
+          {/* Loading Overlay */}
+          {isLoading && (
+            <div className="absolute inset-0 bg-white/70 flex items-center justify-center z-20">
+              <div className="flex items-center gap-2 text-slate-600">
+                <Icon name="hourglass_empty" className="animate-spin" />
+                <span>Loading page {currentPage}...</span>
+              </div>
+            </div>
+          )}
+
           <table className="w-full text-left text-sm text-slate-600">
             <thead className="bg-slate-50 text-xs uppercase font-bold text-slate-500 border-b border-slate-200 sticky top-0 z-10 shadow-sm">
               <tr>
@@ -162,7 +218,7 @@ const TableDetailModal: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
-              {paginatedRows.length === 0 ? (
+              {displayRows.length === 0 ? (
                 <tr>
                   <td
                     colSpan={columns.length || 1}
@@ -172,7 +228,7 @@ const TableDetailModal: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                paginatedRows.map((row, idx) => (
+                displayRows.map((row, idx) => (
                   <tr
                     key={idx}
                     className="hover:bg-blue-50/30 transition-colors group"
@@ -207,23 +263,26 @@ const TableDetailModal: React.FC = () => {
           <p className="text-sm text-slate-500">
             Showing{' '}
             <span className="font-medium text-slate-900">
-              {(currentPage - 1) * ROWS_PER_PAGE + 1}
+              {startRow}
             </span>{' '}
             to{' '}
             <span className="font-medium text-slate-900">
-              {Math.min(currentPage * ROWS_PER_PAGE, rows.length)}
+              {endRow}
             </span>{' '}
             of{' '}
-            <span className="font-medium text-slate-900">{rows.length}</span>{' '}
+            <span className="font-medium text-slate-900">{totalRows.toLocaleString()}</span>{' '}
             results
+            {useServerSide && (
+              <span className="ml-2 text-xs text-blue-500">(Server-side)</span>
+            )}
           </p>
 
           {totalPages > 1 && (
             <nav className="flex items-center gap-1">
               {/* Previous Button */}
               <button
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
+                onClick={() => goToPage(currentPage - 1)}
+                disabled={currentPage === 1 || isLoading}
                 className="p-2 rounded-lg border border-slate-200 bg-white text-slate-400 hover:text-slate-600 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Icon name="chevron_left" size="sm" />
@@ -238,12 +297,14 @@ const TableDetailModal: React.FC = () => {
                 ) : (
                   <button
                     key={page}
-                    onClick={() => setCurrentPage(page as number)}
+                    onClick={() => goToPage(page as number)}
+                    disabled={isLoading}
                     className={cn(
                       'px-3.5 py-2 rounded-lg text-sm font-medium transition-colors',
                       currentPage === page
                         ? 'bg-primary text-white'
-                        : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                        : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
+                      isLoading && 'opacity-50 cursor-not-allowed'
                     )}
                   >
                     {page}
@@ -253,8 +314,8 @@ const TableDetailModal: React.FC = () => {
 
               {/* Next Button */}
               <button
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
+                onClick={() => goToPage(currentPage + 1)}
+                disabled={currentPage === totalPages || isLoading}
                 className="p-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-primary disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Icon name="chevron_right" size="sm" />

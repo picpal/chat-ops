@@ -1,7 +1,7 @@
 ---
 name: server-ops-controller
 description: "Use this agent when the user needs to start, stop, restart, or check the status of any or all services in the ChatOps stack (UI, AI Orchestrator, Core API, PostgreSQL). This includes full stack operations, individual service management, and troubleshooting service connectivity issues.\\n\\nExamples:\\n\\n<example>\\nContext: User wants to start working on the project and needs all services running.\\nuser: \"개발 시작하려고 하는데 서버 다 켜줘\"\\nassistant: \"전체 개발 환경을 시작하겠습니다. server-ops-controller 에이전트를 사용하여 모든 서비스를 기동합니다.\"\\n<Task tool call to server-ops-controller>\\n</example>\\n\\n<example>\\nContext: User is experiencing issues and wants to restart a specific service.\\nuser: \"AI 서비스가 응답이 없어. 재시작해줘\"\\nassistant: \"AI Orchestrator 서비스에 문제가 있군요. server-ops-controller 에이전트를 사용하여 해당 서비스를 재시작하겠습니다.\"\\n<Task tool call to server-ops-controller>\\n</example>\\n\\n<example>\\nContext: User is done for the day and wants to shut everything down.\\nuser: \"오늘 작업 끝났어. 서버 다 내려줘\"\\nassistant: \"개발 환경을 종료하겠습니다. server-ops-controller 에이전트를 사용하여 모든 서비스를 안전하게 종료합니다.\"\\n<Task tool call to server-ops-controller>\\n</example>\\n\\n<example>\\nContext: User wants to check if services are running properly.\\nuser: \"지금 서버 상태 어때?\"\\nassistant: \"현재 서비스 상태를 확인하겠습니다. server-ops-controller 에이전트를 사용하여 각 서비스의 실행 상태를 점검합니다.\"\\n<Task tool call to server-ops-controller>\\n</example>\\n\\n<example>\\nContext: User mentions connection issues that might indicate service problems.\\nuser: \"localhost:8080에 연결이 안 돼\"\\nassistant: \"Core API 연결 문제가 있군요. server-ops-controller 에이전트를 사용하여 서비스 상태를 확인하고 필요시 재시작하겠습니다.\"\\n<Task tool call to server-ops-controller>\\n</example>"
-model: opus
+model: sonnet
 color: red
 ---
 

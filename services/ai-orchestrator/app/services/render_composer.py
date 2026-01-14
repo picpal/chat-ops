@@ -239,13 +239,20 @@ class RenderComposerService:
     ) -> Dict[str, Any]:
         """테이블 형태의 RenderSpec 생성"""
         entity = query_plan.get("entity", "Order")
+        operation = query_plan.get("operation", "list")
         data = query_result.get("data", {})
         rows = data.get("rows", [])
         metadata = query_result.get("metadata", {})
         pagination = query_result.get("pagination", {})
 
-        # 엔티티에 맞는 컬럼 정의
-        columns = ENTITY_COLUMNS.get(entity, self._infer_columns(rows))
+        # Debug: pagination 정보 로깅
+        logger.info(f"[_compose_table_spec] pagination from query_result: {pagination}")
+
+        # 집계 쿼리를 테이블로 표시할 때는 동적 컬럼 생성
+        if operation == "aggregate":
+            columns = self._build_aggregate_columns(query_plan, rows)
+        else:
+            columns = ENTITY_COLUMNS.get(entity, self._infer_columns(rows))
 
         render_spec = {
             "type": "table",
@@ -278,7 +285,10 @@ class RenderComposerService:
             render_spec["pagination"] = {
                 "queryToken": pagination["queryToken"],
                 "hasMore": pagination.get("hasMore", False),
-                "currentPage": pagination.get("currentPage", 1)
+                "currentPage": pagination.get("currentPage", 1),
+                "totalRows": pagination.get("totalRows"),
+                "totalPages": pagination.get("totalPages"),
+                "pageSize": pagination.get("pageSize", 10)
             }
 
         return render_spec
@@ -289,15 +299,22 @@ class RenderComposerService:
         query_plan: Dict[str, Any],
         user_message: str
     ) -> Dict[str, Any]:
-        """집계 결과를 차트 또는 텍스트 형태로 변환"""
+        """집계 결과를 테이블, 차트 또는 텍스트 형태로 변환"""
         data = query_result.get("data", {})
         rows = data.get("rows", [])
         aggregations = data.get("aggregations", {})
         group_by = query_plan.get("groupBy", [])
+        message_lower = user_message.lower()
 
-        # 그룹화가 있으면 차트, 없으면 텍스트
-        if group_by and len(rows) > 1:
+        # 차트 관련 키워드가 있으면 차트로 렌더링
+        chart_keywords = ["그래프", "차트", "시각화", "비율", "점유율", "분포", "추이", "추세"]
+        if any(kw in message_lower for kw in chart_keywords):
             return self._compose_chart_spec(query_result, query_plan, user_message)
+
+        # 그룹화가 있고 여러 행이 있으면 테이블 (기본값 변경)
+        if group_by and len(rows) > 1:
+            return self._compose_table_spec(query_result, query_plan, user_message)
+        # 단일 집계 결과는 텍스트
         else:
             return self._compose_text_spec(query_result, query_plan, user_message)
 
@@ -631,6 +648,59 @@ class RenderComposerService:
         }
         name = entity_names.get(entity, entity)
         return f"{name} 목록 ({row_count}건)"
+
+    def _build_aggregate_columns(
+        self,
+        query_plan: Dict[str, Any],
+        rows: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        집계 쿼리 결과용 동적 컬럼 생성
+
+        Args:
+            query_plan: 실행된 QueryPlan (groupBy, aggregations 포함)
+            rows: 쿼리 결과 데이터
+
+        Returns:
+            테이블 컬럼 정의 리스트
+        """
+        columns = []
+        group_by = query_plan.get("groupBy", [])
+        aggregations = query_plan.get("aggregations", [])
+
+        # 1. groupBy 필드를 컬럼으로 추가
+        for field in group_by:
+            columns.append({
+                "key": field,  # camelCase (SQL alias와 동일)
+                "label": self._get_axis_label(field),
+                "type": "string",
+                "align": "left"
+            })
+
+        # 2. 집계 필드를 컬럼으로 추가
+        for agg in aggregations:
+            func = agg.get("function", "")
+            field = agg.get("field", "")
+            alias = agg.get("alias") or f"{func}_{field}"
+            display_label = self._get_axis_label(alias)
+
+            # 금액 관련 필드는 currency 타입
+            is_currency = field in ("amount", "totalAmount", "netAmount", "fee") or \
+                          any(kw in alias.lower() for kw in ("amount", "fee", "total"))
+            col_type = "currency" if is_currency else "number"
+
+            columns.append({
+                "key": alias,
+                "label": display_label,
+                "type": col_type,
+                "align": "right"
+            })
+
+        # 3. 컬럼이 없으면 데이터에서 추론
+        if not columns and rows:
+            columns = self._infer_columns(rows)
+
+        return columns
 
     def _infer_columns(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """데이터에서 컬럼 정의 추론"""

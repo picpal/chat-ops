@@ -43,6 +43,26 @@ public class SqlBuilderService {
         }
     }
 
+    /**
+     * QueryPlan을 기반으로 COUNT 쿼리 생성 (totalRows 계산용)
+     */
+    public SqlQuery buildCountQuery(Map<String, Object> queryPlan) {
+        String entity = (String) queryPlan.get("entity");
+        String tableName = chatOpsProperties.getTableName(entity);
+        List<Object> params = new ArrayList<>();
+        StringBuilder sql = new StringBuilder();
+
+        sql.append("SELECT COUNT(*) AS total FROM ").append(tableName);
+
+        String whereClause = buildWhereClause(queryPlan, entity, params);
+        if (!whereClause.isEmpty()) {
+            sql.append(" WHERE ").append(whereClause);
+        }
+
+        log.debug("Built count SQL: {} with params: {}", sql, params);
+        return new SqlQuery(sql.toString(), params);
+    }
+
     @SuppressWarnings("unchecked")
     private SqlQuery buildListQuery(Map<String, Object> queryPlan, String entity, String tableName) {
         List<Object> params = new ArrayList<>();
@@ -97,10 +117,11 @@ public class SqlBuilderService {
         StringJoiner selectJoiner = new StringJoiner(", ");
 
         // Add group by fields to select
+        // PostgreSQL은 따옴표 없는 식별자를 소문자로 변환하므로 camelCase 보존을 위해 따옴표 사용
         if (groupByFields != null && !groupByFields.isEmpty()) {
             for (String field : groupByFields) {
                 String column = chatOpsProperties.getColumnName(entity, field);
-                selectJoiner.add(column + " AS " + field);
+                selectJoiner.add(column + " AS \"" + field + "\"");
             }
         }
 
@@ -118,7 +139,8 @@ public class SqlBuilderService {
                     String column = chatOpsProperties.getColumnName(entity, field);
                     aggExpression = function.toUpperCase() + "(" + column + ")";
                 }
-                selectJoiner.add(aggExpression + " AS " + alias);
+                // PostgreSQL camelCase alias 보존을 위해 따옴표 사용
+                selectJoiner.add(aggExpression + " AS \"" + alias + "\"");
             }
         }
 

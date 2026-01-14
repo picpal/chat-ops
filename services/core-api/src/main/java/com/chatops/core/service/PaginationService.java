@@ -23,9 +23,9 @@ public class PaginationService {
     private final Map<String, PaginationContext> tokenStore = new ConcurrentHashMap<>();
 
     /**
-     * 첫 페이지 조회 후 다음 페이지를 위한 토큰 생성
+     * 첫 페이지 조회 후 다음 페이지를 위한 토큰 생성 (totalRows 포함)
      */
-    public String createToken(Map<String, Object> queryPlan, List<Map<String, Object>> currentRows, int limit) {
+    public String createToken(Map<String, Object> queryPlan, List<Map<String, Object>> currentRows, int limit, int totalRows) {
         String token = generateToken();
 
         // Build SQL for next page
@@ -34,6 +34,8 @@ public class PaginationService {
 
         SqlBuilderService.SqlQuery sqlQuery = sqlBuilderService.buildQuery(nextPagePlan);
 
+        int totalPages = totalRows > 0 ? (int) Math.ceil((double) totalRows / limit) : 1;
+
         PaginationContext context = new PaginationContext();
         context.setToken(token);
         context.setSql(sqlQuery.getSql());
@@ -41,6 +43,8 @@ public class PaginationService {
         context.setPageSize(limit);
         context.setCurrentPage(1);
         context.setCurrentOffset(limit);
+        context.setTotalRows(totalRows);
+        context.setTotalPages(totalPages);
         context.setCreatedAt(Instant.now());
         context.setExpiresAt(Instant.now().plusSeconds(
                 chatOpsProperties.getQuery().getTokenExpiryMinutes() * 60L
@@ -49,7 +53,7 @@ public class PaginationService {
 
         tokenStore.put(token, context);
 
-        log.debug("Created pagination token: {} for next page (offset: {})", token, limit);
+        log.debug("Created pagination token: {} for next page (offset: {}, totalRows: {})", token, limit, totalRows);
         return token;
     }
 
@@ -75,6 +79,8 @@ public class PaginationService {
         nextContext.setPageSize(currentContext.getPageSize());
         nextContext.setCurrentPage(currentContext.getCurrentPage() + 1);
         nextContext.setCurrentOffset(nextOffset);
+        nextContext.setTotalRows(currentContext.getTotalRows());
+        nextContext.setTotalPages(currentContext.getTotalPages());
         nextContext.setCreatedAt(Instant.now());
         nextContext.setExpiresAt(Instant.now().plusSeconds(
                 chatOpsProperties.getQuery().getTokenExpiryMinutes() * 60L
@@ -91,6 +97,45 @@ public class PaginationService {
                 token, nextContext.getCurrentPage(), nextOffset);
 
         return token;
+    }
+
+    /**
+     * 특정 페이지 번호로 이동하는 컨텍스트 생성
+     */
+    public PaginationContext createContextForPage(PaginationContext currentContext, int pageNumber) {
+        if (pageNumber < 1 || pageNumber > currentContext.getTotalPages()) {
+            log.warn("Invalid page number: {} (totalPages: {})", pageNumber, currentContext.getTotalPages());
+            return null;
+        }
+
+        // Calculate offset for target page
+        int targetOffset = (pageNumber - 1) * currentContext.getPageSize();
+
+        // Update query plan with new offset
+        Map<String, Object> pagePlan = new HashMap<>(currentContext.getOriginalQueryPlan());
+        pagePlan.put("offset", targetOffset);
+
+        SqlBuilderService.SqlQuery sqlQuery = sqlBuilderService.buildQuery(pagePlan);
+
+        PaginationContext newContext = new PaginationContext();
+        newContext.setToken(currentContext.getToken());  // 같은 토큰 유지
+        newContext.setSql(sqlQuery.getSql());
+        newContext.setParams(sqlQuery.getParams());
+        newContext.setPageSize(currentContext.getPageSize());
+        newContext.setCurrentPage(pageNumber);
+        newContext.setCurrentOffset(targetOffset);
+        newContext.setTotalRows(currentContext.getTotalRows());
+        newContext.setTotalPages(currentContext.getTotalPages());
+        newContext.setCreatedAt(currentContext.getCreatedAt());
+        newContext.setExpiresAt(currentContext.getExpiresAt());
+        newContext.setOriginalQueryPlan(currentContext.getOriginalQueryPlan());
+
+        // Update stored context
+        tokenStore.put(currentContext.getToken(), newContext);
+
+        log.debug("Created context for page: {} (offset: {})", pageNumber, targetOffset);
+
+        return newContext;
     }
 
     /**
@@ -149,6 +194,8 @@ public class PaginationService {
         private int pageSize;
         private int currentPage;
         private int currentOffset;
+        private int totalRows;
+        private int totalPages;
         private Instant createdAt;
         private Instant expiresAt;
         private Map<String, Object> originalQueryPlan;
@@ -158,6 +205,10 @@ public class PaginationService {
         }
 
         public boolean hasNextPage(int currentRowCount) {
+            // totalRows가 설정되어 있으면 이를 기반으로 판단
+            if (totalRows > 0) {
+                return currentPage < totalPages;
+            }
             return currentRowCount >= pageSize;
         }
     }

@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi.testclient import TestClient
 from app.main import app
+from app.services.query_planner import IntentClassification, IntentType
 
 
 class TestFilterLocalIntentDetection:
@@ -38,6 +39,12 @@ class TestFilterLocalIntentDetection:
                 ],
                 "limit": 30
             })
+            # IntentClassification 객체 반환
+            mock_instance.classify_intent = AsyncMock(return_value=IntentClassification(
+                intent=IntentType.FILTER_LOCAL,
+                confidence=0.9,
+                reasoning="이전 결과 참조 표현 감지"
+            ))
             mock.return_value = mock_instance
             yield mock_instance
 
@@ -53,6 +60,12 @@ class TestFilterLocalIntentDetection:
                 "limit": 30,
                 "orderBy": [{"field": "createdAt", "direction": "desc"}]
             })
+            # IntentClassification 객체 반환
+            mock_instance.classify_intent = AsyncMock(return_value=IntentClassification(
+                intent=IntentType.QUERY_NEEDED,
+                confidence=0.95,
+                reasoning="새로운 검색 요청"
+            ))
             mock.return_value = mock_instance
             yield mock_instance
 
@@ -179,6 +192,13 @@ class TestMultipleResultsClarification:
                 ],
                 "limit": 20
             })
+            mock_instance.classify_intent = AsyncMock(return_value=IntentClassification(
+                intent=IntentType.FILTER_LOCAL,
+                confidence=0.9,
+                reasoning="이전 결과 참조 표현 감지"
+            ))
+            # check_clarification_needed도 AsyncMock으로 설정 (다중 결과시 clarification 필요)
+            mock_instance.check_clarification_needed = AsyncMock(return_value=True)
             mock.return_value = mock_instance
             yield mock_instance
 
@@ -284,6 +304,11 @@ class TestFilterLocalWithSingleResult:
                 ],
                 "limit": 30
             })
+            mock_instance.classify_intent = AsyncMock(return_value=IntentClassification(
+                intent=IntentType.FILTER_LOCAL,
+                confidence=0.9,
+                reasoning="이전 결과 참조 표현 감지"
+            ))
             mock.return_value = mock_instance
             yield mock_instance
 
@@ -382,6 +407,11 @@ class TestNoResultsFilterLocal:
                 ],
                 "limit": 30
             })
+            mock_instance.classify_intent = AsyncMock(return_value=IntentClassification(
+                intent=IntentType.FILTER_LOCAL,
+                confidence=0.9,
+                reasoning="이전 결과 참조 표현 감지"
+            ))
             mock.return_value = mock_instance
             yield mock_instance
 

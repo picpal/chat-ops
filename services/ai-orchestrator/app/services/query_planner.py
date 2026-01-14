@@ -48,6 +48,20 @@ def normalize_operator(operator: str) -> str:
     return operator.lower() if operator else operator
 
 
+def escape_template_braces(text: str) -> str:
+    """
+    LangChain ChatPromptTemplate 변수 충돌 방지
+
+    RAG 문서나 대화 컨텍스트에 포함된 JSON의 중괄호 {, }를
+    템플릿 변수로 해석되지 않도록 {{ }} 로 이스케이프합니다.
+
+    예: {"limits": 100} → {{"limits": 100}}
+    """
+    if not text:
+        return text
+    return text.replace("{", "{{").replace("}", "}}")
+
+
 # ============================================
 # Pydantic Models for Structured Output
 # ============================================
@@ -454,10 +468,14 @@ class QueryPlannerService:
                 results_summary += f"\n⚠️ **계산에 사용할 금액: ${latest_amount:,.0f}**\n"
                 results_summary += "이 금액을 기준으로 수수료, 나눗셈 등 계산을 수행하세요!\n"
 
+        # conversation_context에 JSON {..}이 있을 수 있으므로 escape (안전성 확보)
+        safe_conversation_context = escape_template_braces(conversation_context) if conversation_context else ""
+        safe_results_summary = escape_template_braces(results_summary) if results_summary else ""
+
         classification_prompt = f"""당신은 사용자 질문의 의도를 분류하는 AI입니다.
 
-{conversation_context}
-{results_summary}
+{safe_conversation_context}
+{safe_results_summary}
 
 ## 사용자 질문
 "{user_message}"
@@ -760,6 +778,210 @@ clarification이 필요하면 "YES", 필요 없으면 "NO"만 응답하세요.
 - aggregations: count(*) as count
 - timeRange: 시작시간 ~ 종료시간
 
+## 도메인별 Few-shot 예시 (반드시 참고!)
+
+### Payment (결제) 예시
+
+**예시 P1: 특정 가맹점 결제 현황**
+- 입력: "가맹점 mer_001 최근 3개월 결제 조회"
+- entity: Payment
+- filters: [merchantId eq "mer_001"]
+- timeRange: 3개월 전 ~ 현재
+- orderBy: createdAt DESC
+- limit: 10
+
+**예시 P2: 상태별 결제 집계**
+- 입력: "이번 달 결제 상태별 건수와 금액"
+- entity: Payment
+- operation: aggregate
+- aggregations: count(*), sum(amount)
+- groupBy: [status]
+- timeRange: 이번 달 1일 ~ 현재
+
+**예시 P3: 고액 결제 조회**
+- 입력: "100만원 이상 결제 건 조회"
+- entity: Payment
+- filters: [amount gte 1000000]
+- timeRange: 최근 7일
+- orderBy: amount DESC
+
+**예시 P4: 결제 수단별 통계**
+- 입력: "결제 수단별 건수 비교"
+- entity: Payment
+- operation: aggregate
+- aggregations: count(*), sum(amount)
+- groupBy: [method]
+- timeRange: 최근 30일
+
+**예시 P5: 카드 할부 결제**
+- 입력: "할부 결제 건 조회 (무이자 포함)"
+- entity: Payment
+- filters: [cardInstallmentMonths gt 0]
+- timeRange: 최근 30일
+
+**예시 P6: 취소된 결제 목록**
+- 입력: "취소된 결제 내역"
+- entity: Payment
+- filters: [status in ["CANCELED", "PARTIAL_CANCELED"]]
+- timeRange: 최근 7일
+- orderBy: canceledAt DESC
+
+**예시 P7: 일별 매출 추이**
+- 입력: "일별 결제 금액 추이 보여줘"
+- entity: Payment
+- operation: aggregate
+- aggregations: sum(amount) as dailyAmount, count(*) as count
+- groupBy: [approvedAt]
+- timeRange: 최근 30일
+- orderBy: approvedAt ASC
+
+**예시 P8: 가상계좌 입금대기**
+- 입력: "가상계좌 입금 대기 건"
+- entity: Payment
+- filters: [status eq "WAITING_FOR_DEPOSIT", method eq "VIRTUAL_ACCOUNT"]
+- timeRange: 최근 7일
+
+**예시 P9: 평균 결제 금액**
+- 입력: "가맹점별 평균 결제 금액"
+- entity: Payment
+- operation: aggregate
+- aggregations: avg(amount) as avgAmount
+- groupBy: [merchantId]
+- timeRange: 최근 30일
+
+**예시 P10: 간편결제 사용 현황**
+- 입력: "간편결제(카카오페이, 네이버페이) 결제 건"
+- entity: Payment
+- filters: [method eq "EASY_PAY"]
+- timeRange: 최근 7일
+
+### Settlement (정산) 예시
+
+**예시 S1: 가맹점별 정산 현황**
+- 입력: "가맹점별 정산 현황 조회"
+- entity: Settlement
+- orderBy: settlementDate DESC
+- limit: 20
+
+**예시 S2: 특정 가맹점 정산 내역**
+- 입력: "mer_001 정산 내역"
+- entity: Settlement
+- filters: [merchantId eq "mer_001"]
+- orderBy: settlementDate DESC
+
+**예시 S3: 정산 상태별 현황**
+- 입력: "정산 대기 건 조회"
+- entity: Settlement
+- filters: [status eq "PENDING"]
+- orderBy: settlementDate DESC
+
+**예시 S4: 정산 금액 집계**
+- 입력: "가맹점별 총 정산 금액"
+- entity: Settlement
+- operation: aggregate
+- aggregations: sum(netAmount) as totalSettlement
+- groupBy: [merchantId]
+
+**예시 S5: 지급 완료 정산**
+- 입력: "지급 완료된 정산 내역"
+- entity: Settlement
+- filters: [status eq "COMPLETED"]
+- orderBy: paidOutAt DESC
+
+**예시 S6: 월별 정산 추이**
+- 입력: "월별 정산 금액 추이"
+- entity: Settlement
+- operation: aggregate
+- aggregations: sum(netAmount), sum(totalFee)
+- groupBy: [settlementDate]
+- orderBy: settlementDate ASC
+
+**예시 S7: 수수료 높은 정산**
+- 입력: "수수료가 가장 높은 정산 건"
+- entity: Settlement
+- orderBy: totalFee DESC
+- limit: 10
+
+**예시 S8: 정산 실패 건**
+- 입력: "정산 실패한 건 확인"
+- entity: Settlement
+- filters: [status eq "FAILED"]
+
+### Refund (환불) 예시
+
+**예시 R1: 최근 환불 내역**
+- 입력: "최근 환불 내역 조회"
+- entity: Refund
+- orderBy: createdAt DESC
+- limit: 20
+
+**예시 R2: 환불 사유별 통계**
+- 입력: "환불 사유별 건수"
+- entity: Refund
+- operation: aggregate
+- aggregations: count(*) as count
+- groupBy: [cancelReasonCode]
+
+**예시 R3: 대기 중인 환불**
+- 입력: "환불 대기 건"
+- entity: Refund
+- filters: [status eq "PENDING"]
+- orderBy: createdAt DESC
+
+**예시 R4: 환불 금액 집계**
+- 입력: "이번 달 총 환불 금액"
+- entity: Refund
+- operation: aggregate
+- aggregations: sum(amount) as totalRefund, count(*) as count
+- filters: [status eq "SUCCEEDED"]
+
+**예시 R5: 특정 결제 환불**
+- 입력: "결제키 pay_xxx의 환불 내역"
+- entity: Refund
+- filters: [paymentKey eq "pay_xxx"]
+
+**예시 R6: 가맹점별 환불율**
+- 입력: "가맹점별 환불 건수"
+- entity: Refund
+- operation: aggregate
+- aggregations: count(*) as refundCount, sum(amount) as refundAmount
+- groupBy: [paymentKey]
+
+### 복합 조건 예시
+
+**예시 C1: 고액 + 상태 조합**
+- 입력: "100만원 이상 DONE 결제 중 카드 결제"
+- entity: Payment
+- filters: [amount gte 1000000, status eq "DONE", method eq "CARD"]
+- timeRange: 최근 30일
+
+**예시 C2: 기간 + 가맹점 조합**
+- 입력: "지난 주 mer_001, mer_002 결제 비교"
+- entity: Payment
+- filters: [merchantId in ["mer_001", "mer_002"]]
+- timeRange: 지난 주 월~일
+- operation: aggregate
+- groupBy: [merchantId]
+- aggregations: sum(amount), count(*)
+
+**예시 C3: 부정적 조건**
+- 입력: "실패하지 않은 결제 건"
+- entity: Payment
+- filters: [status ne "FAILED", status ne "ABORTED"]
+- timeRange: 최근 7일
+
+**예시 C4: 범위 조건**
+- 입력: "10만원에서 50만원 사이 결제"
+- entity: Payment
+- filters: [amount between [100000, 500000]]
+- timeRange: 최근 7일
+
+**예시 C5: 패턴 매칭**
+- 입력: "주문명에 '도서' 포함된 결제"
+- entity: Payment
+- filters: [orderName like "도서"]
+- timeRange: 최근 30일
+
 ## 시간 표현 해석 (ISO 8601 형식으로 변환)
 
 - "최근 1개월", "지난 달" → start: 1개월 전, end: 현재
@@ -817,6 +1039,99 @@ clarification이 필요하면 "YES", 필요 없으면 "NO"만 응답하세요.
 2. limit의 기본값은 10, 최대값은 100
 3. 집계 쿼리(aggregate)에서 groupBy 없이 단순 집계만 할 경우 결과는 단일 값
 4. 가맹점ID나 주문번호가 구체적으로 명시되면 해당 값으로 필터링
+
+## ❌ Negative Examples (하면 안 되는 것들)
+
+아래 예시들은 **잘못된** QueryPlan 생성 패턴입니다. 이런 실수를 피하세요.
+
+### NE1: entity 누락
+❌ 틀린 예:
+- 입력: "최근 결제 조회"
+- entity: null ← **오류! entity는 필수**
+
+⭕ 올바른 예:
+- entity: Payment
+- timeRange: 최근 7일
+
+### NE2: 시계열 데이터에 timeRange 누락
+❌ 틀린 예:
+- 입력: "결제 목록 보여줘"
+- entity: Payment
+- timeRange: null ← **오류! Payment는 timeRange 필수**
+
+⭕ 올바른 예:
+- entity: Payment
+- timeRange: 최근 7일 (기본값 적용)
+
+### NE3: 기호 연산자 사용
+❌ 틀린 예:
+- filters: [{{{{field: "amount", operator: ">=", value: 100000}}}}] ← **오류! >= 대신 gte 사용**
+
+⭕ 올바른 예:
+- filters: [{{{{field: "amount", operator: "gte", value: 100000}}}}]
+
+### NE4: 물리적 컬럼명 사용
+❌ 틀린 예:
+- filters: [{{{{field: "created_at", ...}}}}] ← **오류! 물리명 created_at 사용**
+
+⭕ 올바른 예:
+- filters: [{{{{field: "createdAt", ...}}}}] ← 논리명 createdAt 사용
+
+### NE5: aggregate인데 aggregations 누락
+❌ 틀린 예:
+- operation: "aggregate"
+- groupBy: ["merchantId"]
+- aggregations: null ← **오류! aggregate면 aggregations 필수**
+
+⭕ 올바른 예:
+- operation: "aggregate"
+- groupBy: ["merchantId"]
+- aggregations: [{{{{function: "count", field: "*"}}}}]
+
+### NE6: 불필요한 clarification 요청
+❌ 틀린 예:
+- 입력: "거래 조회"
+- needs_clarification: true ← **오류! "거래"는 명확히 Payment**
+
+⭕ 올바른 예:
+- entity: Payment (도메인 용어로 바로 판단)
+- needs_clarification: false
+
+### NE7: filter_local인데 entity 설정
+❌ 틀린 예:
+- 입력: "이중에 DONE만"
+- query_intent: "filter_local"
+- entity: Payment ← **오류! filter_local은 entity 불필요**
+
+⭕ 올바른 예:
+- query_intent: "filter_local"
+- filters: [{{{{field: "status", operator: "eq", value: "DONE"}}}}]
+- entity: null (생략)
+
+### NE8: 이전 결과 없이 aggregate_local
+❌ 틀린 예:
+- 입력: "합산해줘" (대화 컨텍스트 없음)
+- query_intent: "aggregate_local" ← **오류! 이전 결과가 없음**
+
+⭕ 올바른 예:
+- query_intent: "new_query"
+- entity: Payment
+- operation: "aggregate"
+- aggregations: [{{{{function: "sum", field: "amount"}}}}]
+
+### NE9: between 값 형식 오류
+❌ 틀린 예:
+- filters: [{{{{operator: "between", value: "100000~500000"}}}}] ← **오류! 문자열 형식**
+
+⭕ 올바른 예:
+- filters: [{{{{operator: "between", value: [100000, 500000]}}}}] ← 배열 형식
+
+### NE10: 잘못된 상태값
+❌ 틀린 예:
+- filters: [{{{{field: "status", operator: "eq", value: "완료"}}}}] ← **오류! 한글 상태값**
+
+⭕ 올바른 예:
+- filters: [{{{{field: "status", operator: "eq", value: "DONE"}}}}] ← 영문 상태값
 
 ## 렌더링 타입 (preferredRenderType) - 매우 중요!
 
@@ -1105,12 +1420,16 @@ clarification이 필요하면 "YES", 필요 없으면 "NO"만 응답하세요.
             system_prompt = self._build_system_prompt()
 
             # RAG 컨텍스트가 있으면 시스템 프롬프트에 추가
+            # (JSON 중괄호를 escape하여 ChatPromptTemplate 변수 충돌 방지)
             if rag_context:
-                system_prompt = f"{system_prompt}\n\n{rag_context}"
+                rag_context_escaped = escape_template_braces(rag_context)
+                system_prompt = f"{system_prompt}\n\n{rag_context_escaped}"
 
             # 대화 컨텍스트가 있으면 시스템 프롬프트에 추가
+            # (사용자 입력에 {변수} 패턴이 있을 수 있음)
             if conversation_context:
-                system_prompt = f"{system_prompt}\n\n{conversation_context}"
+                conversation_context_escaped = escape_template_braces(conversation_context)
+                system_prompt = f"{system_prompt}\n\n{conversation_context_escaped}"
                 logger.info("Added conversation context to system prompt")
 
             prompt = ChatPromptTemplate.from_messages([

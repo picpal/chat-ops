@@ -16,8 +16,17 @@ export interface QueryResult {
   metadata: {
     executionTimeMs: number
     rowsReturned: number
+    totalRows?: number
     queryToken?: string
     hasMore?: boolean
+  }
+  pagination?: {
+    queryToken: string
+    hasMore: boolean
+    currentPage: number
+    totalPages: number
+    totalRows: number
+    pageSize: number
   }
   error?: {
     code: string
@@ -29,5 +38,9 @@ export interface QueryResult {
 export interface PaginationResponse {
   queryToken: string
   hasMore: boolean
+  currentPage: number
+  totalPages: number
+  totalRows: number
+  pageSize: number
   data: Array<Record<string, any>>
 }

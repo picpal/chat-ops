@@ -15,6 +15,13 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc')
   const { open: openModal } = useModal()
 
+  // Debug: 컴포넌트 렌더링 시 pagination 정보 확인
+  console.log('[TableRenderer] RENDER - pagination check:', {
+    specPagination: spec.pagination,
+    dataPagination: data.pagination,
+    dataMetadata: data.metadata,
+  })
+
   // Extract table config with fallback for safety
   const tableConfig = spec.table || { columns: [], dataRef: 'data.rows' }
   const columns = tableConfig.columns || []
@@ -94,7 +101,47 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
 
   // Open fullscreen modal
   const handleFullscreen = () => {
-    openModal('tableDetail', { spec, data, rows: sortedRows })
+    // Extract pagination info for server-side pagination in modal
+    console.log('[TableRenderer] handleFullscreen - data structure:', {
+      hasSpecPagination: !!spec.pagination,
+      specPagination: spec.pagination,
+      hasPagination: !!data.pagination,
+      pagination: data.pagination,
+      hasMetadata: !!data.metadata,
+      metadata: data.metadata,
+      rowsLength: rows.length,
+    })
+
+    // Priority 1: Check renderSpec pagination (added by RenderComposer)
+    // Priority 2: Check queryResult pagination (from Core API)
+    // Priority 3: Fallback to metadata
+    const paginationInfo = spec.pagination ? {
+      queryToken: spec.pagination.queryToken,
+      totalRows: spec.pagination.totalRows,
+      totalPages: spec.pagination.totalPages,
+      pageSize: spec.pagination.pageSize,
+      hasMore: spec.pagination.hasMore,
+    } : data.pagination ? {
+      queryToken: data.pagination.queryToken,
+      totalRows: data.pagination.totalRows,
+      totalPages: data.pagination.totalPages,
+      pageSize: data.pagination.pageSize,
+      hasMore: data.pagination.hasMore,
+    } : data.metadata?.totalRows ? {
+      queryToken: data.metadata.queryToken,
+      totalRows: data.metadata.totalRows,
+      pageSize: rows.length,
+      hasMore: data.metadata.hasMore,
+    } : undefined
+
+    console.log('[TableRenderer] paginationInfo to pass to modal:', paginationInfo)
+
+    openModal('tableDetail', {
+      spec,
+      data,
+      rows: sortedRows,
+      serverPagination: paginationInfo,
+    })
   }
 
   // Check if action is enabled

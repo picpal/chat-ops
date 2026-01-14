@@ -4,6 +4,7 @@ pgvector를 사용한 벡터 유사도 검색
 """
 
 import os
+import json
 import logging
 from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass
@@ -13,6 +14,67 @@ import psycopg
 from pgvector.psycopg import register_vector
 
 logger = logging.getLogger(__name__)
+
+
+def calculate_dynamic_k(query: str) -> int:
+    """
+    쿼리 복잡도에 따른 동적 k값 계산
+
+    - 단순 쿼리 (10단어 미만): k=2 (빠른 검색)
+    - 중간 쿼리 (10-30단어): k=5 (표준)
+    - 복잡 쿼리 (30+ 단어): k=8 (광범위 검색)
+
+    Args:
+        query: 사용자 쿼리 문자열
+
+    Returns:
+        적절한 k값 (2, 5, 또는 8)
+    """
+    # 한국어/영어 단어 수 계산 (공백 기준)
+    word_count = len(query.split())
+
+    if word_count < 10:
+        return 2
+    elif word_count < 30:
+        return 5
+    else:
+        return 8
+
+
+def get_domain_min_similarity(query: str) -> float:
+    """
+    쿼리의 도메인에 따른 최소 유사도 임계값 계산
+
+    - 결제(Payment) 관련: 0.55 (금융 민감도 높음)
+    - 환불(Refund) 관련: 0.55
+    - 정산(Settlement) 관련: 0.53
+    - 가맹점(Merchant) 관련: 0.50
+    - 기타: 0.45
+
+    Args:
+        query: 사용자 쿼리 문자열
+
+    Returns:
+        최소 유사도 임계값
+    """
+    query_lower = query.lower()
+
+    # 결제 관련 키워드
+    payment_keywords = ["결제", "거래", "트랜잭션", "payment", "승인", "카드"]
+    refund_keywords = ["환불", "취소", "반품", "refund", "cancel"]
+    settlement_keywords = ["정산", "지급", "settlement", "payout"]
+    merchant_keywords = ["가맹점", "merchant", "상점", "업체"]
+
+    if any(kw in query_lower for kw in payment_keywords):
+        return 0.55
+    elif any(kw in query_lower for kw in refund_keywords):
+        return 0.55
+    elif any(kw in query_lower for kw in settlement_keywords):
+        return 0.53
+    elif any(kw in query_lower for kw in merchant_keywords):
+        return 0.50
+    else:
+        return 0.45
 
 
 @dataclass
@@ -74,23 +136,36 @@ class RAGService:
     async def search_docs(
         self,
         query: str,
-        k: int = 3,
+        k: Optional[int] = None,
         doc_types: Optional[List[str]] = None,
-        min_similarity: float = 0.5
+        min_similarity: Optional[float] = None,
+        use_dynamic_params: bool = True
     ) -> List[Document]:
         """
         쿼리와 유사한 문서 검색
 
         Args:
             query: 검색 쿼리
-            k: 반환할 문서 개수
+            k: 반환할 문서 개수 (None이면 동적 계산)
             doc_types: 필터링할 문서 타입 (None이면 전체)
-            min_similarity: 최소 유사도 임계값
+            min_similarity: 최소 유사도 임계값 (None이면 도메인 기반 동적 계산)
+            use_dynamic_params: True면 k와 min_similarity를 동적으로 계산
 
         Returns:
             유사도 순으로 정렬된 문서 리스트
         """
-        logger.info(f"Searching documents for query: {query[:50]}...")
+        # 동적 파라미터 계산
+        if use_dynamic_params:
+            if k is None:
+                k = calculate_dynamic_k(query)
+            if min_similarity is None:
+                min_similarity = get_domain_min_similarity(query)
+        else:
+            # 기본값 사용
+            k = k or 3
+            min_similarity = min_similarity if min_similarity is not None else 0.5
+
+        logger.info(f"Searching documents for query: {query[:50]}... (k={k}, min_sim={min_similarity})")
 
         # OpenAI API가 없으면 키워드 기반 검색 fallback
         if not self.openai_api_key:
@@ -318,25 +393,28 @@ class RAGService:
             except Exception as e:
                 logger.warning(f"Failed to create embedding: {e}")
 
+        # metadata를 JSON 문자열로 변환
+        metadata_json = json.dumps(metadata or {})
+
         with self._get_connection() as conn:
             with conn.cursor() as cur:
                 if embedding:
                     cur.execute(
                         """
                         INSERT INTO documents (doc_type, title, content, embedding, metadata, status, submitted_by, submitted_at)
-                        VALUES (%s, %s, %s, %s::vector, %s, %s, %s, CURRENT_TIMESTAMP)
+                        VALUES (%s, %s, %s, %s::vector, %s::jsonb, %s, %s, CURRENT_TIMESTAMP)
                         RETURNING id
                         """,
-                        (doc_type, title, content, embedding, metadata or {}, status, submitted_by)
+                        (doc_type, title, content, embedding, metadata_json, status, submitted_by)
                     )
                 else:
                     cur.execute(
                         """
                         INSERT INTO documents (doc_type, title, content, metadata, status, submitted_by, submitted_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                        VALUES (%s, %s, %s, %s::jsonb, %s, %s, CURRENT_TIMESTAMP)
                         RETURNING id
                         """,
-                        (doc_type, title, content, metadata or {}, status, submitted_by)
+                        (doc_type, title, content, metadata_json, status, submitted_by)
                     )
                 doc_id = cur.fetchone()[0]
                 conn.commit()

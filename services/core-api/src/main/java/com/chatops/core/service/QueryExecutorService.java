@@ -62,6 +62,25 @@ public class QueryExecutorService {
         );
     }
 
+    /**
+     * COUNT 쿼리를 실행하여 총 건수 반환
+     */
+    private int executeCountQuery(Map<String, Object> queryPlan) {
+        try {
+            SqlBuilderService.SqlQuery countQuery = sqlBuilderService.buildCountQuery(queryPlan);
+            log.debug("Executing count SQL: {}", countQuery.getSql());
+            Integer count = jdbcTemplate.queryForObject(
+                    countQuery.getSql(),
+                    Integer.class,
+                    countQuery.getParams().toArray()
+            );
+            return count != null ? count : 0;
+        } catch (Exception e) {
+            log.warn("Failed to execute count query: {}", e.getMessage());
+            return 0;
+        }
+    }
+
     private Map<String, Object> executePaginatedQuery(String requestId, String queryToken, long startTime) {
         // Retrieve stored query context from token
         PaginationService.PaginationContext context = paginationService.getContext(queryToken);
@@ -146,22 +165,33 @@ public class QueryExecutorService {
         metadata.put("rowsReturned", rows.size());
         metadata.put("dataSource", "postgresql");
         metadata.put("executedAt", Instant.now().toString());
+
+        // list/search 작업에서 totalRows 계산
+        int totalRows = 0;
+        if ("list".equals(operation) || "search".equals(operation)) {
+            totalRows = executeCountQuery(queryPlan);
+            metadata.put("totalRows", totalRows);
+        }
         response.put("metadata", metadata);
 
         // Pagination (if applicable)
         int limit = getLimit(queryPlan);
         if (rows.size() >= limit) {
             // There might be more data - create pagination token
-            String queryToken = paginationService.createToken(queryPlan, rows, limit);
-            response.put("pagination", Map.of(
-                    "queryToken", queryToken,
-                    "hasMore", true,
-                    "currentPage", 1
-            ));
+            String queryToken = paginationService.createToken(queryPlan, rows, limit, totalRows);
+            int totalPages = totalRows > 0 ? (int) Math.ceil((double) totalRows / limit) : 1;
+            Map<String, Object> pagination = new HashMap<>();
+            pagination.put("queryToken", queryToken);
+            pagination.put("hasMore", true);
+            pagination.put("currentPage", 1);
+            pagination.put("totalPages", totalPages);
+            pagination.put("totalRows", totalRows);
+            pagination.put("pageSize", limit);
+            response.put("pagination", pagination);
         }
 
-        log.info("Query executed successfully. requestId={}, rows={}, time={}ms",
-                requestId, rows.size(), executionTime);
+        log.info("Query executed successfully. requestId={}, rows={}, totalRows={}, time={}ms",
+                requestId, rows.size(), totalRows, executionTime);
 
         return response;
     }

@@ -14,6 +14,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/query")
 @RequiredArgsConstructor
+@CrossOrigin(origins = "*")
 public class QueryController {
 
     private final QueryExecutorService queryExecutorService;
@@ -78,6 +79,75 @@ public class QueryController {
         queryPlanWithToken.put("requestId", "page-" + token.substring(0, 8));
 
         Map<String, Object> result = queryExecutorService.executeQuery(queryPlanWithToken);
+
+        return ResponseEntity.ok(result);
+    }
+
+    /**
+     * 특정 페이지 번호로 이동
+     */
+    @GetMapping("/page/{token}/goto/{pageNumber}")
+    public ResponseEntity<Map<String, Object>> goToPage(
+            @PathVariable String token,
+            @PathVariable int pageNumber
+    ) {
+        log.info("Go to page {} requested with token: {}", pageNumber, token);
+
+        PaginationService.PaginationContext context = paginationService.getContext(token);
+
+        if (context == null) {
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("requestId", "unknown");
+            errorResponse.put("status", "error");
+            errorResponse.put("error", Map.of(
+                    "code", "INVALID_TOKEN",
+                    "message", "Query token is invalid or expired"
+            ));
+            return ResponseEntity.badRequest().body(errorResponse);
+        }
+
+        // Validate page number
+        if (pageNumber < 1 || pageNumber > context.getTotalPages()) {
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("requestId", "page-" + token.substring(0, 8));
+            errorResponse.put("status", "error");
+            errorResponse.put("error", Map.of(
+                    "code", "INVALID_PAGE",
+                    "message", "Page number must be between 1 and " + context.getTotalPages()
+            ));
+            return ResponseEntity.badRequest().body(errorResponse);
+        }
+
+        // Create context for the target page (updates the stored context with new offset)
+        PaginationService.PaginationContext pageContext = paginationService.createContextForPage(context, pageNumber);
+
+        if (pageContext == null) {
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("requestId", "page-" + token.substring(0, 8));
+            errorResponse.put("status", "error");
+            errorResponse.put("error", Map.of(
+                    "code", "PAGE_ERROR",
+                    "message", "Failed to navigate to page " + pageNumber
+            ));
+            return ResponseEntity.internalServerError().body(errorResponse);
+        }
+
+        // Execute query using the updated context
+        Map<String, Object> queryPlanWithToken = new HashMap<>();
+        queryPlanWithToken.put("queryToken", token);
+        queryPlanWithToken.put("requestId", "page-" + token.substring(0, 8));
+
+        Map<String, Object> result = queryExecutorService.executeQuery(queryPlanWithToken);
+
+        // Override pagination info with accurate values
+        Map<String, Object> pagination = new HashMap<>();
+        pagination.put("queryToken", token);
+        pagination.put("currentPage", pageNumber);
+        pagination.put("totalPages", pageContext.getTotalPages());
+        pagination.put("totalRows", pageContext.getTotalRows());
+        pagination.put("pageSize", pageContext.getPageSize());
+        pagination.put("hasMore", pageNumber < pageContext.getTotalPages());
+        result.put("pagination", pagination);
 
         return ResponseEntity.ok(result);
     }

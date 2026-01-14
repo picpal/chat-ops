@@ -110,3 +110,71 @@ See: infra/docker/.env.example
 - **E2E 테스트 전**: 모든 서비스(UI, AI, Core API, DB) 실행 확인
 - **check-point 기록**: 주요 구현 완료 시 check-point/ 폴더에 문서화
 - **test-scenarios 기록**: 테스트 시나리오는 test-scenarios/ 폴더에 저장
+
+## 9. Business Domain (PG 결제 백오피스)
+
+이 서비스는 **PG(결제 게이트웨이) 백오피스**로, 자연어로 결제/정산 데이터를 조회합니다.
+
+### 핵심 엔티티 (10개)
+
+| 엔티티 | 테이블 | 역할 |
+|--------|--------|------|
+| **Merchant** | merchants | 가맹점 정보, 수수료율, 정산 계좌 |
+| **PgCustomer** | pg_customers | 가맹점별 고객 정보 |
+| **PaymentMethod** | payment_methods | 저장된 결제수단 (카드, 간편결제 등) |
+| **Payment** | payments | 결제 트랜잭션 (핵심 테이블) |
+| **PaymentHistory** | payment_history | 결제 상태 변경 이력 |
+| **Refund** | refunds | 환불/취소 트랜잭션 |
+| **BalanceTransaction** | balance_transactions | 가맹점 잔액 변동 내역 |
+| **Settlement** | settlements | 일일 정산 |
+| **SettlementDetail** | settlement_details | 정산 상세 내역 |
+| **Order** | orders | 주문 (샘플 데이터) |
+
+### 엔티티 관계도
+
+```
+Merchant (가맹점)
+├─ PgCustomer (고객) 1:N
+│  └─ PaymentMethod (결제수단) 1:N
+├─ Payment (결제) 1:N
+│  ├─ PaymentHistory (이력) 1:N
+│  └─ Refund (환불) 1:N
+├─ BalanceTransaction (잔액거래) 1:N
+└─ Settlement (정산) 1:N
+   └─ SettlementDetail (정산상세) 1:N
+```
+
+### 주요 비즈니스 규칙
+
+**결제 상태 흐름:**
+- READY → IN_PROGRESS → DONE (정상)
+- DONE → CANCELED (전액취소) / PARTIAL_CANCELED (부분취소)
+- WAITING_FOR_DEPOSIT (가상계좌) → DONE / EXPIRED
+
+**정산 주기:** D+0, D+1, D+2, WEEKLY, MONTHLY
+
+**수수료율:**
+- 신용카드: 3.3%
+- 체크카드: 2.5%
+- 가상계좌: 300원/건
+- 간편결제: 3.3%
+
+### 시계열 데이터 (timeRange 필수)
+
+- Payment, PaymentHistory, BalanceTransaction
+
+### RAG 문서 구성 (26개)
+
+| 타입 | 개수 | 용도 |
+|------|------|------|
+| entity | 7 | 테이블/필드 정의 |
+| business_logic | 6 | 비즈니스 규칙 |
+| error_code | 4 | 에러 처리 |
+| faq | 9 | 조회 패턴 예시 |
+
+### 주요 조회 시나리오
+
+- **결제**: 가맹점별 매출, 상태별 집계, 기간별 추이
+- **환불**: 환불 현황, 사유 분석, 환불율
+- **정산**: 정산 현황, 지급 상태, 금액 검증
+- **가맹점**: 상태 현황, 수수료율

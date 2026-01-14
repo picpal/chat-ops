@@ -1,4 +1,5 @@
 export { useChat } from './useChat'
 export { usePagination } from './usePagination'
+export { useServerPagination } from './useServerPagination'
 export { useModal } from './useModal'
 export * from './useDocuments'

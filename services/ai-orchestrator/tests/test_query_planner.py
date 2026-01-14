@@ -37,46 +37,33 @@ class TestQueryPlannerService:
     # ========================================
 
     class TestFallbackPlan:
-        """_create_fallback_plan 메서드 테스트"""
+        """_create_fallback_plan 메서드 테스트 (PG 도메인)"""
 
         def setup_method(self):
             self.planner = QueryPlannerService(api_key="test-api-key")
 
-        def test_fallback_default_entity_is_payment(self):
-            """기본 엔티티는 Payment (결제 도메인 백오피스)"""
+        def test_fallback_returns_clarification(self):
+            """Fallback은 clarification 요청을 반환"""
             result = self.planner._create_fallback_plan("뭔가 보여줘")
-            assert result["entity"] == "Payment"
-            assert result["operation"] == "list"
-            assert result["limit"] == 10
+            assert result["needs_clarification"] == True
+            assert "clarification_question" in result
+            assert "clarification_options" in result
 
-        def test_fallback_detects_customer_keywords(self):
-            """고객 관련 키워드 감지"""
-            test_cases = ["고객 정보 보여줘", "customer list", "고객 목록"]
-            for message in test_cases:
-                result = self.planner._create_fallback_plan(message)
-                assert result["entity"] == "Customer", f"Failed for: {message}"
+        def test_fallback_includes_pg_domain_options(self):
+            """Fallback 옵션에 PG 도메인 엔티티 포함"""
+            result = self.planner._create_fallback_plan("데이터 조회")
+            options = result["clarification_options"]
+            # PG 도메인 주요 엔티티 포함 확인
+            assert any("Payment" in opt for opt in options)
+            assert any("Refund" in opt for opt in options)
+            assert any("Merchant" in opt for opt in options)
+            assert any("Settlement" in opt for opt in options)
 
-        def test_fallback_detects_product_keywords(self):
-            """상품 관련 키워드 감지"""
-            test_cases = ["상품 조회", "product list", "상품 목록"]
-            for message in test_cases:
-                result = self.planner._create_fallback_plan(message)
-                assert result["entity"] == "Product", f"Failed for: {message}"
-
-        def test_fallback_detects_inventory_keywords(self):
-            """재고 관련 키워드 감지"""
-            test_cases = ["재고 현황", "inventory status", "재고 확인"]
-            for message in test_cases:
-                result = self.planner._create_fallback_plan(message)
-                assert result["entity"] == "Inventory", f"Failed for: {message}"
-
-        def test_fallback_detects_payment_log_keywords(self):
-            """결제 로그 관련 키워드 감지"""
-            # "로그" 키워드가 명시적으로 있는 경우 PaymentLog로 매핑
-            test_cases = ["결제 로그 보여줘", "에러 로그", "시스템 로그"]
-            for message in test_cases:
-                result = self.planner._create_fallback_plan(message)
-                assert result["entity"] == "PaymentLog", f"Failed for: {message}"
+        def test_fallback_includes_user_message_in_question(self):
+            """Fallback 질문에 사용자 메시지 포함"""
+            user_message = "특정 데이터 조회"
+            result = self.planner._create_fallback_plan(user_message)
+            assert user_message in result["clarification_question"]
 
     # ========================================
     # Convert to Dict Tests
@@ -161,7 +148,7 @@ class TestQueryPlannerService:
         def test_convert_plan_with_time_range(self):
             """시간 범위가 있는 QueryPlan 변환"""
             plan = QueryPlan(
-                entity=EntityType.PAYMENT_LOG,
+                entity=EntityType.PAYMENT,
                 operation=OperationType.LIST,
                 time_range=TimeRange(
                     start="2024-01-01T00:00:00Z",
@@ -186,23 +173,23 @@ class TestQueryPlannerService:
             self.planner = QueryPlannerService(api_key="test-api-key")
 
         def test_system_prompt_contains_entity_schemas(self):
-            """시스템 프롬프트에 엔티티 스키마 포함"""
+            """시스템 프롬프트에 PG 도메인 엔티티 스키마 포함"""
             prompt = self.planner._build_system_prompt()
 
-            assert "Order" in prompt
-            assert "Customer" in prompt
-            assert "Product" in prompt
-            assert "Inventory" in prompt
-            assert "PaymentLog" in prompt
+            # PG 결제 도메인 엔티티
+            assert "Payment" in prompt
+            assert "Merchant" in prompt
+            assert "Refund" in prompt
+            assert "Settlement" in prompt
 
         def test_system_prompt_contains_field_info(self):
             """시스템 프롬프트에 필드 정보 포함"""
             prompt = self.planner._build_system_prompt()
 
-            assert "orderId" in prompt
-            assert "customerId" in prompt
+            # PG 도메인 필드
+            assert "paymentKey" in prompt or "merchantId" in prompt
             assert "status" in prompt
-            assert "totalAmount" in prompt
+            assert "amount" in prompt
 
         def test_system_prompt_contains_operation_types(self):
             """시스템 프롬프트에 작업 유형 설명 포함"""
@@ -210,17 +197,20 @@ class TestQueryPlannerService:
 
             assert "list" in prompt
             assert "aggregate" in prompt
-            assert "search" in prompt
 
 
 class TestEntitySchemas:
-    """ENTITY_SCHEMAS 상수 테스트"""
+    """ENTITY_SCHEMAS 상수 테스트 (PG 도메인)"""
 
     def test_all_entities_defined(self):
-        """모든 엔티티 정의됨"""
-        expected_entities = ["Order", "Customer", "Product", "Inventory", "PaymentLog"]
+        """PG 도메인 엔티티 정의됨"""
+        expected_entities = [
+            "Order", "Merchant", "PgCustomer", "PaymentMethod", "Payment",
+            "PaymentHistory", "Refund", "BalanceTransaction",
+            "Settlement", "SettlementDetail"
+        ]
         for entity in expected_entities:
-            assert entity in ENTITY_SCHEMAS
+            assert entity in ENTITY_SCHEMAS, f"{entity} not found in ENTITY_SCHEMAS"
 
     def test_entity_has_description(self):
         """각 엔티티에 description 포함"""
@@ -240,7 +230,7 @@ class TestPydanticModels:
     def test_query_plan_default_values(self):
         """QueryPlan 기본값"""
         plan = QueryPlan(
-            entity=EntityType.ORDER,
+            entity=EntityType.PAYMENT,
             operation=OperationType.LIST
         )
         assert plan.limit == 10
@@ -251,7 +241,7 @@ class TestPydanticModels:
         """QueryPlan limit 범위 검증"""
         # 최소값 테스트
         plan = QueryPlan(
-            entity=EntityType.ORDER,
+            entity=EntityType.PAYMENT,
             operation=OperationType.LIST,
             limit=1
         )
@@ -259,7 +249,7 @@ class TestPydanticModels:
 
         # 최대값 테스트
         plan = QueryPlan(
-            entity=EntityType.ORDER,
+            entity=EntityType.PAYMENT,
             operation=OperationType.LIST,
             limit=100
         )
@@ -272,13 +262,11 @@ class TestPydanticModels:
         assert set(operators) == set(expected)
 
     def test_entity_types(self):
-        """EntityType 값 테스트 - PG 결제 도메인 엔티티 포함"""
+        """EntityType 값 테스트 - PG 결제 도메인 엔티티"""
         entities = [e.value for e in EntityType]
         expected = [
-            # 기존 e-commerce 엔티티
-            "Order", "Customer", "Product", "Inventory", "PaymentLog",
             # PG 결제 도메인 엔티티
-            "Merchant", "PgCustomer", "PaymentMethod", "Payment",
+            "Order", "Merchant", "PgCustomer", "PaymentMethod", "Payment",
             "PaymentHistory", "Refund", "BalanceTransaction",
             "Settlement", "SettlementDetail"
         ]
@@ -303,32 +291,64 @@ class TestQueryPlannerSingleton:
 class TestGenerateQueryPlanWithMock:
     """Mock을 사용한 generate_query_plan 테스트"""
 
+    @patch('app.services.query_plan_validator.get_query_plan_validator')
     @patch('app.services.query_planner.get_rag_service')
-    async def test_generate_query_plan_uses_fallback_on_error(self, mock_rag):
-        """LLM 오류 시 fallback 사용"""
+    async def test_generate_query_plan_uses_fallback_on_error(self, mock_rag, mock_validator):
+        """LLM 오류 시 clarification fallback 사용"""
         # RAG mock 설정
         mock_rag_instance = MagicMock()
         mock_rag_instance.search_docs = AsyncMock(return_value=[])
         mock_rag_instance.format_context = MagicMock(return_value="")
         mock_rag.return_value = mock_rag_instance
 
-        planner = QueryPlannerService(api_key=None)  # API key 없으면 LLM 실패
+        # Validator mock 설정 (auto-correction 방지)
+        mock_validator_instance = MagicMock()
+        mock_validator_instance.validate_and_correct = AsyncMock(return_value={
+            "valid": True,
+            "score": 1.0,
+            "issues": [],
+            "corrected_plan": None  # auto-correction 비활성화
+        })
+        mock_validator.return_value = mock_validator_instance
 
-        result = await planner.generate_query_plan("최근 주문 보여줘")
+        planner = QueryPlannerService(api_key=None)
 
-        # fallback이 사용됨
-        assert result["entity"] == "Order"
-        assert result["operation"] == "list"
+        # LLM 호출을 mock하여 예외 발생시키기
+        with patch.object(planner, '_get_llm') as mock_llm:
+            mock_llm.side_effect = Exception("LLM initialization failed")
 
+            result = await planner.generate_query_plan("최근 주문 보여줘")
+
+            # fallback이 clarification 반환
+            assert result["needs_clarification"] == True
+            assert "clarification_options" in result
+
+    @patch('app.services.query_plan_validator.get_query_plan_validator')
     @patch('app.services.query_planner.get_rag_service')
-    async def test_generate_query_plan_customer_fallback(self, mock_rag):
-        """고객 관련 메시지의 fallback"""
+    async def test_generate_query_plan_fallback_includes_options(self, mock_rag, mock_validator):
+        """Fallback에 PG 도메인 옵션 포함"""
         mock_rag_instance = MagicMock()
         mock_rag_instance.search_docs = AsyncMock(return_value=[])
         mock_rag.return_value = mock_rag_instance
 
+        # Validator mock 설정
+        mock_validator_instance = MagicMock()
+        mock_validator_instance.validate_and_correct = AsyncMock(return_value={
+            "valid": True,
+            "score": 1.0,
+            "issues": [],
+            "corrected_plan": None
+        })
+        mock_validator.return_value = mock_validator_instance
+
         planner = QueryPlannerService(api_key=None)
 
-        result = await planner.generate_query_plan("고객 목록 조회")
+        # LLM 호출을 mock하여 예외 발생시키기
+        with patch.object(planner, '_get_llm') as mock_llm:
+            mock_llm.side_effect = Exception("LLM initialization failed")
 
-        assert result["entity"] == "Customer"
+            result = await planner.generate_query_plan("데이터 조회")
+
+            # PG 도메인 옵션 포함 확인
+            options = result.get("clarification_options", [])
+            assert any("Payment" in opt for opt in options)

@@ -121,9 +121,9 @@ class TestRenderComposerChartTypes:
 
         assert spec["type"] == "table"
         assert "columns" in spec["table"]
-        # Payment 엔티티의 컬럼이 정의되어 있어야 함
+        # Payment 엔티티의 컬럼이 정의되어 있어야 함 (snake_case)
         column_keys = [col["key"] for col in spec["table"]["columns"]]
-        assert "paymentKey" in column_keys
+        assert "payment_key" in column_keys
         assert "amount" in column_keys
 
     def test_single_count_renders_as_text(self):
@@ -191,8 +191,8 @@ class TestRenderComposerPaymentEntities:
 
         assert spec["type"] == "table"
         column_keys = [col["key"] for col in spec["table"]["columns"]]
-        assert "refundKey" in column_keys
-        assert "paymentKey" in column_keys
+        assert "refund_key" in column_keys
+        assert "payment_key" in column_keys
         assert "amount" in column_keys
 
     def test_settlement_list_has_correct_columns(self):
@@ -227,8 +227,8 @@ class TestRenderComposerPaymentEntities:
 
         assert spec["type"] == "table"
         column_keys = [col["key"] for col in spec["table"]["columns"]]
-        assert "settlementId" in column_keys
-        assert "netAmount" in column_keys
+        assert "settlement_id" in column_keys
+        assert "net_amount" in column_keys
 
     def test_merchant_list_has_correct_columns(self):
         """가맹점 목록이 올바른 컬럼으로 렌더링"""
@@ -261,61 +261,65 @@ class TestRenderComposerPaymentEntities:
 
         assert spec["type"] == "table"
         column_keys = [col["key"] for col in spec["table"]["columns"]]
-        assert "merchantId" in column_keys
-        assert "businessName" in column_keys
+        assert "merchant_id" in column_keys
+        assert "business_name" in column_keys
 
 
 class TestQueryPlannerFallback:
-    """QueryPlanner fallback 로직 테스트"""
+    """QueryPlanner fallback 로직 테스트 (clarification 반환)"""
 
-    def test_fallback_defaults_to_payment(self):
-        """폴백 시 기본 엔티티가 Payment"""
+    def test_fallback_returns_clarification(self):
+        """폴백 시 clarification 요청을 반환"""
         from app.services.query_planner import QueryPlannerService
 
         planner = QueryPlannerService()
         result = planner._create_fallback_plan("알 수 없는 질문")
 
-        assert result["entity"] == "Payment"
-        assert result["operation"] == "list"
+        assert result["needs_clarification"] == True
+        assert "clarification_question" in result
+        assert "clarification_options" in result
 
-    def test_fallback_detects_refund_keywords(self):
-        """폴백이 환불 키워드를 감지"""
+    def test_fallback_includes_pg_domain_options(self):
+        """폴백 옵션에 PG 도메인 엔티티 포함"""
         from app.services.query_planner import QueryPlannerService
 
         planner = QueryPlannerService()
 
         result = planner._create_fallback_plan("환불 내역 보여줘")
-        assert result["entity"] == "Refund"
+        options = result["clarification_options"]
+        # PG 도메인 주요 엔티티 옵션 포함 확인
+        assert any("Payment" in opt for opt in options)
+        assert any("Refund" in opt for opt in options)
 
-    def test_fallback_detects_settlement_keywords(self):
-        """폴백이 정산 키워드를 감지"""
+    def test_fallback_includes_settlement_option(self):
+        """폴백 옵션에 정산 엔티티 포함"""
         from app.services.query_planner import QueryPlannerService
 
         planner = QueryPlannerService()
 
         result = planner._create_fallback_plan("정산 현황 알려줘")
-        assert result["entity"] == "Settlement"
-        assert result["operation"] == "aggregate"  # "현황" 키워드로 인해
+        options = result["clarification_options"]
+        assert any("Settlement" in opt for opt in options)
 
-    def test_fallback_detects_merchant_keywords(self):
-        """폴백이 가맹점 키워드를 감지"""
+    def test_fallback_includes_merchant_option(self):
+        """폴백 옵션에 가맹점 엔티티 포함"""
         from app.services.query_planner import QueryPlannerService
 
         planner = QueryPlannerService()
 
         result = planner._create_fallback_plan("가맹점 목록")
-        assert result["entity"] == "Merchant"
+        options = result["clarification_options"]
+        assert any("Merchant" in opt for opt in options)
 
-    def test_fallback_detects_aggregate_keywords(self):
-        """폴백이 집계 키워드를 감지"""
+    def test_fallback_includes_user_message_in_question(self):
+        """폴백 질문에 사용자 메시지 포함"""
         from app.services.query_planner import QueryPlannerService
 
         planner = QueryPlannerService()
 
-        for message in ["결제 건수", "결제 통계", "결제 추이", "총 결제"]:
-            result = planner._create_fallback_plan(message)
-            assert result["operation"] == "aggregate", f"Failed for message: {message}"
-            assert "aggregations" in result
+        user_message = "결제 건수 알려줘"
+        result = planner._create_fallback_plan(user_message)
+        assert user_message in result["clarification_question"]
 
 
 class TestChartTypeDecision:
@@ -414,18 +418,24 @@ class TestEntitySchemas:
             assert entity in ENTITY_SCHEMAS, f"Missing entity: {entity}"
 
     def test_entity_columns_match_schemas(self):
-        """ENTITY_COLUMNS가 스키마와 일치"""
+        """ENTITY_COLUMNS가 스키마와 일치 (snake_case -> camelCase 변환)"""
         from app.services.render_composer import ENTITY_COLUMNS
         from app.services.query_planner import ENTITY_SCHEMAS
+
+        def snake_to_camel(s: str) -> str:
+            """snake_case를 camelCase로 변환"""
+            components = s.split('_')
+            return components[0] + ''.join(x.title() for x in components[1:])
 
         # Payment 엔티티 확인
         assert "Payment" in ENTITY_COLUMNS
 
-        payment_column_keys = {col["key"] for col in ENTITY_COLUMNS["Payment"]}
+        # snake_case 컬럼 키를 camelCase로 변환
+        payment_column_keys_camel = {snake_to_camel(col["key"]) for col in ENTITY_COLUMNS["Payment"]}
         payment_schema_fields = set(ENTITY_SCHEMAS["Payment"]["fields"].keys())
 
-        # 모든 컬럼 키가 스키마 필드에 있어야 함 (일부 필드만 표시할 수 있음)
-        for key in payment_column_keys:
+        # 컬럼 키(camelCase 변환)가 스키마 필드에 있어야 함
+        for key in payment_column_keys_camel:
             assert key in payment_schema_fields, f"Column {key} not in schema"
 
 
