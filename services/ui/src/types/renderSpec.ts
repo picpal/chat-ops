@@ -38,6 +38,7 @@ export interface TableAction {
 export interface TableConfig {
   columns: TableColumn[]
   dataRef: string // JSONPath reference to data in QueryResult (default: "data.rows")
+  data?: any[] // Inline data (takes priority over dataRef, used for preview mode)
   actions?: TableAction[]
   pagination?: {
     enabled: boolean
@@ -45,12 +46,23 @@ export interface TableConfig {
     pageSize?: number
     queryToken?: string
     hasMore?: boolean
+    totalRows?: number
   }
+}
+
+// Preview mode config (for Text-to-SQL results)
+export interface PreviewConfig {
+  enabled: boolean
+  previewRows: number
+  totalRows: number
+  message?: string
 }
 
 export interface TableRenderSpec extends BaseRenderSpec {
   type: 'table'
   table: TableConfig
+  fullData?: any[]  // Full data for modal (when preview mode is enabled)
+  preview?: PreviewConfig
 }
 
 // Text Renderer Types

@@ -1169,9 +1169,13 @@ def build_sql_history(conversation_history: Optional[List[ChatMessageItem]]) -> 
 
 
 def compose_sql_render_spec(result: Dict[str, Any], question: str) -> Dict[str, Any]:
-    """SQL 실행 결과를 RenderSpec으로 변환"""
+    """SQL 실행 결과를 RenderSpec으로 변환
+
+    미리보기 모드: 10건만 표시하고 전체보기는 모달에서
+    """
     data = result.get("data", [])
     row_count = result.get("rowCount", 0)
+    PREVIEW_LIMIT = 10  # 미리보기 행 수
 
     if not data:
         return {
@@ -1219,13 +1223,14 @@ def compose_sql_render_spec(result: Dict[str, Any], question: str) -> Dict[str, 
             }
         }
 
-    # 다중 행: 테이블로 표시
+    # 다중 행: 테이블로 표시 (미리보기 모드)
     if data:
         columns = list(data[0].keys())
         column_defs = []
         for col in columns:
             col_def = {
                 "key": col,  # UI TableRenderer 호환
+                "label": col.replace("_", " ").title(),  # TableRenderer expects 'label'
                 "field": col,
                 "headerName": col.replace("_", " ").title()
             }
@@ -1238,17 +1243,40 @@ def compose_sql_render_spec(result: Dict[str, Any], question: str) -> Dict[str, 
                 col_def["type"] = "datetime"
             column_defs.append(col_def)
 
+        # 미리보기용 데이터 (최대 PREVIEW_LIMIT건)
+        preview_data = data[:PREVIEW_LIMIT]
+        has_more = row_count > PREVIEW_LIMIT
+
+        # 타이틀: 미리보기인 경우 표시
+        if has_more:
+            title = f"조회 결과 ({row_count}건 중 {PREVIEW_LIMIT}건 미리보기)"
+        else:
+            title = f"조회 결과 ({row_count}건)"
+
         return {
             "type": "table",
-            "title": f"조회 결과 ({row_count}건)",
+            "title": title,
             "table": {
                 "columns": column_defs,
-                "data": data,
+                "data": preview_data,  # 미리보기만 전송
+                "dataRef": "data.rows",
+                "actions": [
+                    {"action": "fullscreen", "label": "전체보기"},
+                    {"action": "export-csv", "label": "CSV 다운로드"}
+                ],
                 "pagination": {
-                    "enabled": row_count > 20,
-                    "pageSize": 20,
+                    "enabled": False,  # 미리보기에서는 페이지네이션 비활성화
+                    "pageSize": PREVIEW_LIMIT,
                     "totalRows": row_count
                 }
+            },
+            # 전체 데이터는 별도로 저장 (모달에서 사용)
+            "fullData": data if has_more else None,
+            "preview": {
+                "enabled": has_more,
+                "previewRows": PREVIEW_LIMIT,
+                "totalRows": row_count,
+                "message": f"전체 {row_count}건 중 {PREVIEW_LIMIT}건만 표시됩니다. 전체보기 버튼을 클릭하세요."
             },
             "metadata": {
                 "sql": result.get("sql"),

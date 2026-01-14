@@ -28,10 +28,16 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
   const dataRef = tableConfig.dataRef || 'data.rows'
 
   // Get rows from data using dataRef (JSONPath)
+  // Priority: spec.table.data (inline) > queryResult (via dataRef)
   const rows = useMemo(() => {
+    // If table has inline data, use it (e.g., preview mode)
+    if (tableConfig.data && Array.isArray(tableConfig.data)) {
+      return tableConfig.data
+    }
+    // Otherwise, extract from queryResult via dataRef
     const extractedData = getJSONPath(data, dataRef) || []
     return Array.isArray(extractedData) ? extractedData : []
-  }, [data, dataRef])
+  }, [tableConfig.data, data, dataRef])
 
   // Pagination
   const {
@@ -99,6 +105,10 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
     downloadCSV(csvData, `${spec.title || 'export'}.csv`)
   }
 
+  // Check if preview mode is enabled
+  const isPreviewMode = spec.preview?.enabled === true
+  const previewTotalRows = spec.preview?.totalRows || 0
+
   // Open fullscreen modal
   const handleFullscreen = () => {
     // Extract pagination info for server-side pagination in modal
@@ -110,7 +120,13 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
       hasMetadata: !!data.metadata,
       metadata: data.metadata,
       rowsLength: rows.length,
+      isPreviewMode,
+      hasFullData: !!spec.fullData,
+      fullDataLength: spec.fullData?.length,
     })
+
+    // If preview mode with fullData, use that for the modal
+    const modalRows = isPreviewMode && spec.fullData ? spec.fullData : sortedRows
 
     // Priority 1: Check renderSpec pagination (added by RenderComposer)
     // Priority 2: Check queryResult pagination (from Core API)
@@ -139,7 +155,7 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
     openModal('tableDetail', {
       spec,
       data,
-      rows: sortedRows,
+      rows: modalRows,  // Use full data if available
       serverPagination: paginationInfo,
     })
   }
@@ -162,7 +178,19 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
           <Icon name="refresh" size="sm" />
         </button>
       )}
-      {hasAction('fullscreen') && (
+      {/* Preview mode: Show prominent "View All" button */}
+      {isPreviewMode && hasAction('fullscreen') && (
+        <Button
+          variant="primary"
+          size="sm"
+          icon="aspect_ratio"
+          onClick={handleFullscreen}
+        >
+          전체 {previewTotalRows}건 보기
+        </Button>
+      )}
+      {/* Normal mode: Show simple fullscreen icon */}
+      {!isPreviewMode && hasAction('fullscreen') && (
         <button
           className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
           onClick={handleFullscreen}
@@ -264,9 +292,33 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
           </div>
         )}
 
+        {/* Preview mode banner */}
+        {isPreviewMode && (
+          <div className="bg-blue-50 px-6 py-3 border-t border-blue-100 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm text-blue-700">
+              <Icon name="info" size="sm" className="text-blue-500" />
+              <span>
+                전체 <strong>{previewTotalRows.toLocaleString()}건</strong> 중{' '}
+                <strong>{sortedRows.length}건</strong>만 미리보기로 표시됩니다.
+              </span>
+            </div>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleFullscreen}
+            >
+              전체보기
+            </Button>
+          </div>
+        )}
+
         {/* Footer info */}
         <div className="bg-slate-50 px-6 py-2 border-t border-slate-200 text-xs text-slate-500 flex justify-between">
-          <span>{sortedRows.length} rows</span>
+          <span>
+            {isPreviewMode
+              ? `${sortedRows.length} / ${previewTotalRows} rows (preview)`
+              : `${sortedRows.length} rows`}
+          </span>
           <span>Query: {data.requestId}</span>
         </div>
       </div>
