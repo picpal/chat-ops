@@ -9,7 +9,7 @@ SQL_ENABLE_TEXT_TO_SQL=true 설정 시 AI가 직접 SQL을 생성하여 읽기 �
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List, Generator
+from typing import Optional, Dict, Any, List, Generator, Tuple
 import httpx
 import logging
 import os
@@ -18,6 +18,61 @@ import uuid
 import csv
 import io
 from datetime import datetime
+
+
+# ============================================
+# 참조 표현 감지 (연속 대화 WHERE 조건 병합용)
+# ============================================
+
+def detect_reference_expression(message: str) -> Tuple[bool, str]:
+    """
+    사용자 메시지에서 참조 표현 감지
+
+    참조 표현이 있으면 이전 WHERE 조건을 유지해야 함을 의미
+
+    Args:
+        message: 사용자 메시지
+
+    Returns:
+        (is_refinement, ref_type) 튜플
+        - is_refinement: True면 이전 조건 유지 필요
+        - ref_type: 'filter' (필터 추가), 'new' (새 쿼리), 'none' (해당없음)
+    """
+    # 필터/세분화 패턴 (이전 결과 참조)
+    FILTER_PATTERNS = [
+        r'이\s*중에?',           # "이중에", "이 중에"
+        r'여기서',               # "여기서"
+        r'그\s*중',              # "그중", "그 중"
+        r'직전',                 # "직전"
+        r'방금',                 # "방금"
+        r'위\s*결과',            # "위 결과", "위결과"
+        r'앞\s*(서|에서)',        # "앞서", "앞에서"
+        r'해당\s*데이터',         # "해당 데이터"
+        r'이\s*결과',            # "이 결과"
+        r'저\s*중에?',           # "저중에", "저 중에"
+        r'거기서',               # "거기서"
+    ]
+
+    # 새 쿼리 패턴 (이전 조건 무시)
+    NEW_QUERY_PATTERNS = [
+        r'새로\s*.{0,10}조회',   # "새로 조회", "새로 환불 내역 조회"
+        r'다시\s*.{0,10}조회',   # "다시 조회", "다시 결제 조회"
+        r'처음부터',             # "처음부터"
+        r'새\s*쿼리',            # "새 쿼리"
+        r'전체\s*다시',          # "전체 다시"
+    ]
+
+    # 새 쿼리 패턴 먼저 체크 (우선순위 높음)
+    for pattern in NEW_QUERY_PATTERNS:
+        if re.search(pattern, message, re.IGNORECASE):
+            return (False, 'new')
+
+    # 필터 패턴 체크
+    for pattern in FILTER_PATTERNS:
+        if re.search(pattern, message, re.IGNORECASE):
+            return (True, 'filter')
+
+    return (False, 'none')
 
 # Text-to-SQL 모드 플래그
 ENABLE_TEXT_TO_SQL = os.getenv("SQL_ENABLE_TEXT_TO_SQL", "false").lower() == "true"
@@ -1137,14 +1192,20 @@ async def handle_text_to_sql(
     try:
         text_to_sql = get_text_to_sql_service()
 
+        # 참조 표현 감지 (연속 대화 WHERE 조건 병합용)
+        is_refinement, ref_type = detect_reference_expression(request.message)
+        if is_refinement:
+            logger.info(f"[{request_id}] Reference expression detected (type: {ref_type}), will preserve previous WHERE conditions")
+
         # 대화 이력 변환 (Text-to-SQL 형식)
         sql_history = build_sql_history(request.conversation_history)
 
-        # SQL 생성 및 실행
+        # SQL 생성 및 실행 (is_refinement 전달)
         result = await text_to_sql.query(
             question=request.message,
             conversation_history=sql_history,
-            retry_on_error=True
+            retry_on_error=True,
+            is_refinement=is_refinement
         )
 
         # 실행 시간 계산

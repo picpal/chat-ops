@@ -5,9 +5,10 @@ Text-to-SQL Service: 자연어를 SQL로 변환하고 실행
 import os
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import psycopg
 from psycopg.rows import dict_row
@@ -16,6 +17,124 @@ from app.services.sql_validator import SqlValidator, ValidationResult, get_sql_v
 from app.services.rag_service import get_rag_service
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================
+# WHERE 조건 추출 및 병합 유틸리티
+# ============================================
+
+def extract_where_conditions(sql: str) -> List[str]:
+    """
+    SQL에서 WHERE 절의 개별 조건들을 추출
+
+    Args:
+        sql: SQL 쿼리 문자열
+
+    Returns:
+        개별 조건 문자열 리스트 (예: ["created_at >= '2024-01-01'", "status = 'DONE'"])
+    """
+    if not sql:
+        return []
+
+    # WHERE 절 추출 (WHERE ... 부터 GROUP BY/ORDER BY/LIMIT/; 전까지)
+    where_pattern = r'\bWHERE\s+(.+?)(?=\s*(?:GROUP\s+BY|ORDER\s+BY|LIMIT|OFFSET|;|$))'
+    match = re.search(where_pattern, sql, re.IGNORECASE | re.DOTALL)
+
+    if not match:
+        return []
+
+    where_clause = match.group(1).strip()
+
+    # AND로 분리 (단, 괄호 안의 AND는 무시)
+    conditions = []
+    current_condition = ""
+    paren_depth = 0
+
+    # 토큰 단위로 분리
+    tokens = re.split(r'(\s+AND\s+)', where_clause, flags=re.IGNORECASE)
+
+    for token in tokens:
+        # AND 토큰인 경우
+        if re.match(r'^\s*AND\s*$', token, re.IGNORECASE):
+            if paren_depth == 0 and current_condition.strip():
+                conditions.append(current_condition.strip())
+                current_condition = ""
+            else:
+                current_condition += token
+        else:
+            # 괄호 깊이 추적
+            paren_depth += token.count('(') - token.count(')')
+            current_condition += token
+
+    # 마지막 조건 추가
+    if current_condition.strip():
+        conditions.append(current_condition.strip())
+
+    return conditions
+
+
+def extract_condition_field(condition: str) -> Optional[str]:
+    """
+    조건에서 필드명 추출
+
+    예: "created_at >= '2024-01-01'" → "created_at"
+        "status = 'DONE'" → "status"
+        "merchant_id IN ('mer_001', 'mer_002')" → "merchant_id"
+    """
+    # 일반적인 비교 연산자 패턴
+    patterns = [
+        r'^(\w+)\s*(?:=|!=|<>|>=|<=|>|<|LIKE|ILIKE|IN|NOT\s+IN|BETWEEN)',
+        r'^(\w+)\s+IS\s+(?:NOT\s+)?NULL',
+    ]
+
+    for pattern in patterns:
+        match = re.match(pattern, condition.strip(), re.IGNORECASE)
+        if match:
+            return match.group(1).lower()
+
+    return None
+
+
+def merge_where_conditions(existing: List[str], new: List[str]) -> List[str]:
+    """
+    기존 조건과 새 조건을 병합
+
+    규칙:
+    1. 동일 필드의 조건은 새 조건으로 대체
+    2. 다른 필드의 조건은 AND로 병합
+
+    Args:
+        existing: 기존 WHERE 조건 리스트
+        new: 새 WHERE 조건 리스트
+
+    Returns:
+        병합된 조건 리스트
+    """
+    if not existing:
+        return new
+    if not new:
+        return existing
+
+    # 기존 조건을 필드명으로 매핑
+    existing_by_field: Dict[str, str] = {}
+    for cond in existing:
+        field_name = extract_condition_field(cond)
+        if field_name:
+            existing_by_field[field_name] = cond
+        else:
+            # 필드명 추출 실패 시 원본 유지
+            existing_by_field[cond] = cond
+
+    # 새 조건으로 덮어쓰기
+    for cond in new:
+        field_name = extract_condition_field(cond)
+        if field_name:
+            existing_by_field[field_name] = cond
+        else:
+            # 필드명 추출 실패 시 그냥 추가
+            existing_by_field[cond] = cond
+
+    return list(existing_by_field.values())
 
 
 # ============================================
@@ -197,6 +316,9 @@ class ConversationContext:
     previous_question: Optional[str]
     previous_sql: Optional[str]
     previous_result_summary: Optional[str]
+    # 연속 대화용 추가 필드
+    accumulated_where_conditions: List[str] = field(default_factory=list)
+    is_refinement: bool = False  # True면 이전 WHERE 조건 유지 필요
 
 
 class TextToSqlService:
@@ -318,7 +440,12 @@ class TextToSqlService:
 1. SELECT 문만 생성 (INSERT, UPDATE, DELETE 금지)
 2. 테이블/컬럼명은 snake_case 사용 (예: payment_key, merchant_id)
 3. 문자열 비교 시 정확한 값 사용 (예: status = 'DONE')
-4. 날짜 필터 시 적절한 범위 지정
+4. 시간 범위 조회 규칙:
+   - 기본값: created_at 사용 (전체 데이터 조회, 대기/실패 상태 포함)
+   - "승인일 기준", "매출 기준" 명시 시: approved_at 사용
+   - "정산 대상" 명시 시: approved_at 사용 + status='DONE' 조건 추가
+   - 예: "오늘 결제 내역" → WHERE created_at >= '2024-01-01'
+   - 예: "오늘 승인된 매출" → WHERE approved_at >= '2024-01-01' AND status = 'DONE'
 5. LIMIT 규칙:
    - 사용자가 명시적으로 건수를 지정한 경우에만 LIMIT 추가 (예: "10건만", "상위 100개")
    - 건수 지정이 없으면 LIMIT 없이 생성 (시스템이 자동으로 처리함)
@@ -338,7 +465,38 @@ class TextToSqlService:
 
         # 연속 대화 컨텍스트
         if conversation_context and conversation_context.previous_sql:
-            prompt_parts.append(f"""
+            # 참조 모드 (is_refinement=True)일 때 강화된 지시
+            if conversation_context.is_refinement and conversation_context.accumulated_where_conditions:
+                # 누적된 WHERE 조건을 명시적으로 제공
+                conditions_str = "\n".join([f"  - {cond}" for cond in conversation_context.accumulated_where_conditions])
+                prompt_parts.append(f"""
+## 연속 대화 처리 규칙 (매우 중요!)
+
+사용자가 "이중에", "여기서", "그중" 등의 참조 표현을 사용했습니다.
+이전 쿼리 결과를 세분화하려는 의도입니다.
+
+### 반드시 유지해야 할 이전 WHERE 조건:
+{conditions_str}
+
+### 이전 SQL:
+```sql
+{conversation_context.previous_sql}
+```
+
+### 처리 규칙:
+1. 위 WHERE 조건들을 **반드시 모두 유지**하세요
+2. 새 조건은 **AND로 추가**하세요
+3. **절대로 이전 조건을 제거하지 마세요!**
+4. 동일 필드에 새 조건이 있으면 새 조건으로 대체하세요
+
+### 예시:
+- 이전: WHERE created_at >= '2024-01-01'
+- 현재 질문: "이중 mer_001만"
+- 결과: WHERE created_at >= '2024-01-01' AND merchant_id = 'mer_001'
+""")
+            else:
+                # 기존 로직 (참조 표현 없음)
+                prompt_parts.append(f"""
 ## 이전 대화 컨텍스트
 이전 질문: {conversation_context.previous_question}
 이전 SQL:
@@ -518,7 +676,8 @@ class TextToSqlService:
         self,
         question: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
-        retry_on_error: bool = True
+        retry_on_error: bool = True,
+        is_refinement: bool = False
     ) -> Dict[str, Any]:
         """
         자연어 질문 처리 (생성 + 검증 + 실행)
@@ -527,6 +686,7 @@ class TextToSqlService:
             question: 사용자 질문
             conversation_history: 대화 이력 [{"role": "user/assistant", "content": "..."}]
             retry_on_error: 에러 시 재시도 여부
+            is_refinement: 참조 표현 감지됨 (이전 WHERE 조건 유지 필요)
 
         Returns:
             {
@@ -538,8 +698,11 @@ class TextToSqlService:
                 "executionTimeMs": float
             }
         """
-        # 대화 컨텍스트 구성
-        conversation_context = self._build_conversation_context(conversation_history)
+        # 대화 컨텍스트 구성 (is_refinement 전달)
+        conversation_context = self._build_conversation_context(
+            conversation_history,
+            is_refinement=is_refinement
+        )
 
         # SQL 생성
         raw_sql, validation_result = await self.generate_sql(question, conversation_context)
@@ -588,9 +751,19 @@ class TextToSqlService:
 
     def _build_conversation_context(
         self,
-        conversation_history: Optional[List[Dict[str, str]]]
+        conversation_history: Optional[List[Dict[str, str]]],
+        is_refinement: bool = False
     ) -> Optional[ConversationContext]:
-        """대화 이력에서 컨텍스트 추출"""
+        """
+        대화 이력에서 컨텍스트 추출
+
+        Args:
+            conversation_history: 대화 이력
+            is_refinement: True면 이전 WHERE 조건 누적 필요 (참조 표현 감지됨)
+
+        Returns:
+            ConversationContext 또는 None
+        """
         if not conversation_history or len(conversation_history) < 2:
             return None
 
@@ -608,10 +781,29 @@ class TextToSqlService:
         if not previous_sql or not previous_question:
             return None
 
+        # 참조 모드일 때 WHERE 조건 누적 추출
+        accumulated_conditions = []
+        if is_refinement:
+            # 전체 대화 이력에서 SQL의 WHERE 조건 누적
+            for msg in conversation_history:
+                if msg.get("role") == "assistant" and "sql" in msg:
+                    sql = msg.get("sql", "")
+                    conditions = extract_where_conditions(sql)
+                    if conditions:
+                        # 기존 조건과 병합 (동일 필드는 새 조건으로 대체)
+                        accumulated_conditions = merge_where_conditions(
+                            accumulated_conditions,
+                            conditions
+                        )
+
+            logger.info(f"Accumulated WHERE conditions (refinement mode): {accumulated_conditions}")
+
         return ConversationContext(
             previous_question=previous_question,
             previous_sql=previous_sql,
-            previous_result_summary=None
+            previous_result_summary=None,
+            accumulated_where_conditions=accumulated_conditions,
+            is_refinement=is_refinement
         )
 
     def _summarize_result(self, data: List[Dict[str, Any]], max_rows: int = 3) -> str:
