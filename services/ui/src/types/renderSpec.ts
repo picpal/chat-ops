@@ -1,4 +1,4 @@
-export type RenderSpecType = 'table' | 'text' | 'chart' | 'log' | 'composite' | 'clarification' | 'filter_local' | 'aggregate_local'
+export type RenderSpecType = 'table' | 'text' | 'chart' | 'log' | 'composite' | 'clarification' | 'filter_local' | 'aggregate_local' | 'download'
 
 // Server-side pagination info (added by RenderComposer)
 export interface ServerPaginationInfo {
@@ -208,6 +208,26 @@ export interface AggregateLocalRenderSpec extends Omit<BaseRenderSpec, 'requestI
   }
 }
 
+// Download Renderer Types (대용량 데이터 다운로드)
+export interface DownloadConfig {
+  totalRows: number
+  maxDisplayRows: number
+  message: string
+  sql: string
+  formats: ('csv' | 'excel')[]
+}
+
+export interface DownloadRenderSpec extends Omit<BaseRenderSpec, 'requestId'> {
+  type: 'download'
+  download: DownloadConfig
+  requestId?: string
+  metadata?: {
+    sql?: string
+    executionTimeMs?: number
+    mode?: string
+  }
+}
+
 // Union type for all RenderSpec types
 export type RenderSpec =
   | TableRenderSpec
@@ -218,3 +238,4 @@ export type RenderSpec =
   | ClarificationRenderSpec
   | FilterLocalRenderSpec
   | AggregateLocalRenderSpec
+  | DownloadRenderSpec

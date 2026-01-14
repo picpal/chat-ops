@@ -7,13 +7,16 @@ SQL_ENABLE_TEXT_TO_SQL=true 설정 시 AI가 직접 SQL을 생성하여 읽기 �
 """
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Generator
 import httpx
 import logging
 import os
 import re
 import uuid
+import csv
+import io
 from datetime import datetime
 
 # Text-to-SQL 모드 플래그
@@ -1016,6 +1019,106 @@ async def search_documents(query: str, k: int = 3):
 
 
 # ============================================
+# 대용량 데이터 다운로드 엔드포인트
+# ============================================
+
+class DownloadRequest(BaseModel):
+    """다운로드 요청"""
+    sql: str
+    format: str = "csv"  # csv 또는 excel
+
+
+@router.post("/chat/download")
+async def download_query_result(request: DownloadRequest):
+    """
+    대용량 쿼리 결과 다운로드
+
+    - SQL 재검증 후 실행 (LIMIT 없이)
+    - Streaming 응답으로 메모리 효율화
+    """
+    if not ENABLE_TEXT_TO_SQL:
+        raise HTTPException(400, "Text-to-SQL mode is not enabled")
+
+    from app.services.sql_validator import get_sql_validator
+    from app.services.text_to_sql import get_text_to_sql_service
+
+    # SQL 검증 (보안)
+    validator = get_sql_validator()
+    validation = validator.validate(request.sql)
+
+    if not validation.is_valid:
+        raise HTTPException(400, f"Invalid SQL: {', '.join(validation.issues)}")
+
+    # LIMIT 제거 (전체 데이터 다운로드)
+    unlimited_sql = re.sub(r'\bLIMIT\s+\d+', '', validation.sanitized_sql, flags=re.IGNORECASE)
+    unlimited_sql = re.sub(r'\bOFFSET\s+\d+', '', unlimited_sql, flags=re.IGNORECASE)
+
+    logger.info(f"Download request - Original SQL: {request.sql[:100]}...")
+    logger.info(f"Download request - Unlimited SQL: {unlimited_sql[:100]}...")
+
+    text_to_sql = get_text_to_sql_service()
+
+    def generate_csv() -> Generator[str, None, None]:
+        """CSV 스트리밍 생성기"""
+        import psycopg
+        from psycopg.rows import dict_row
+
+        try:
+            with text_to_sql._get_readonly_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(unlimited_sql)
+
+                    # 헤더 출력
+                    columns = [desc[0] for desc in cur.description]
+                    output = io.StringIO()
+                    writer = csv.writer(output)
+                    writer.writerow(columns)
+                    yield output.getvalue()
+
+                    # 데이터 배치 처리 (1000건씩)
+                    batch_size = 1000
+                    row_count = 0
+                    while True:
+                        rows = cur.fetchmany(batch_size)
+                        if not rows:
+                            break
+
+                        output = io.StringIO()
+                        writer = csv.writer(output)
+                        for row in rows:
+                            # datetime 변환
+                            processed_row = []
+                            for value in row.values() if hasattr(row, 'values') else row:
+                                if hasattr(value, 'isoformat'):
+                                    processed_row.append(value.isoformat())
+                                else:
+                                    processed_row.append(value)
+                            writer.writerow(processed_row)
+                            row_count += 1
+
+                        yield output.getvalue()
+
+                    logger.info(f"Download completed: {row_count} rows")
+
+        except psycopg.Error as e:
+            logger.error(f"Download SQL execution failed: {e}")
+            yield f"Error: {str(e)}"
+
+    # 파일명 생성
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"query_result_{timestamp}.csv"
+
+    return StreamingResponse(
+        generate_csv(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "X-Content-Type-Options": "nosniff"
+        }
+    )
+
+
+# ============================================
 # Text-to-SQL 모드 핸들러
 # ============================================
 
@@ -1171,11 +1274,34 @@ def build_sql_history(conversation_history: Optional[List[ChatMessageItem]]) -> 
 def compose_sql_render_spec(result: Dict[str, Any], question: str) -> Dict[str, Any]:
     """SQL 실행 결과를 RenderSpec으로 변환
 
-    미리보기 모드: 10건만 표시하고 전체보기는 모달에서
+    - 1000건 초과: 다운로드 RenderSpec (테이블 표시 안함)
+    - 1000건 이하: 미리보기 10건 + 전체보기 모달
     """
     data = result.get("data", [])
     row_count = result.get("rowCount", 0)
+    total_count = result.get("totalCount") or row_count
+    is_truncated = result.get("isTruncated", False)
     PREVIEW_LIMIT = 10  # 미리보기 행 수
+    MAX_DISPLAY_ROWS = 1000  # 화면 표시 최대 건수
+
+    # 1000건 초과: 다운로드 RenderSpec 반환
+    if is_truncated:
+        return {
+            "type": "download",
+            "title": "대용량 데이터 조회",
+            "download": {
+                "totalRows": total_count,
+                "maxDisplayRows": MAX_DISPLAY_ROWS,
+                "message": f"조회 결과가 {total_count:,}건으로 화면 표시 제한({MAX_DISPLAY_ROWS:,}건)을 초과합니다.",
+                "sql": result.get("sql"),
+                "formats": ["csv"]
+            },
+            "metadata": {
+                "sql": result.get("sql"),
+                "executionTimeMs": result.get("executionTimeMs"),
+                "mode": "text_to_sql"
+            }
+        }
 
     if not data:
         return {

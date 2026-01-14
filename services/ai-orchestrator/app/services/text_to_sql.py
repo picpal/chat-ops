@@ -183,10 +183,12 @@ class SqlResult:
     """SQL 실행 결과"""
     success: bool
     data: List[Dict[str, Any]]
-    row_count: int
+    row_count: int                              # 반환된 행 수
     sql: str
     error: Optional[str] = None
     execution_time_ms: Optional[float] = None
+    total_count: Optional[int] = None           # 전체 건수 (COUNT 쿼리 결과)
+    is_truncated: bool = False                  # max_rows 초과로 잘렸는지 여부
 
 
 @dataclass
@@ -214,7 +216,7 @@ class TextToSqlService:
         readonly_url: Optional[str] = None,
         timeout_seconds: int = 30,
         max_rows: int = 1000,
-        default_limit: int = 100
+        default_limit: int = 1000
     ):
         """
         Args:
@@ -317,7 +319,9 @@ class TextToSqlService:
 2. 테이블/컬럼명은 snake_case 사용 (예: payment_key, merchant_id)
 3. 문자열 비교 시 정확한 값 사용 (예: status = 'DONE')
 4. 날짜 필터 시 적절한 범위 지정
-5. 대용량 결과 방지를 위해 적절한 LIMIT 사용
+5. LIMIT 규칙:
+   - 사용자가 명시적으로 건수를 지정한 경우에만 LIMIT 추가 (예: "10건만", "상위 100개")
+   - 건수 지정이 없으면 LIMIT 없이 생성 (시스템이 자동으로 처리함)
 6. 금액 집계 시 SUM, COUNT, AVG 등 적절히 활용
 
 응답 형식:
@@ -398,9 +402,47 @@ class TextToSqlService:
 
         return raw_sql, validation_result
 
+    def _get_count(self, sql: str) -> int:
+        """
+        원본 SQL을 COUNT 쿼리로 변환하여 전체 건수 확인
+
+        Args:
+            sql: 원본 SELECT SQL
+
+        Returns:
+            전체 행 수
+        """
+        import re
+
+        # LIMIT/OFFSET 제거
+        count_sql = re.sub(r'\bLIMIT\s+\d+', '', sql, flags=re.IGNORECASE)
+        count_sql = re.sub(r'\bOFFSET\s+\d+', '', count_sql, flags=re.IGNORECASE)
+
+        # ORDER BY 제거 (COUNT에서 불필요)
+        count_sql = re.sub(r'\bORDER\s+BY\s+[^)]+$', '', count_sql, flags=re.IGNORECASE)
+
+        # SELECT ... → SELECT COUNT(*) FROM (...) sub
+        count_sql = f"SELECT COUNT(*) as cnt FROM ({count_sql.strip()}) sub"
+
+        try:
+            with self._get_readonly_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(count_sql)
+                    result = cur.fetchone()
+                    count = result['cnt'] if result else 0
+                    logger.info(f"COUNT query result: {count}")
+                    return count
+        except psycopg.Error as e:
+            logger.warning(f"COUNT query failed, returning 0: {e}")
+            return 0
+
     def execute_sql(self, sql: str) -> SqlResult:
         """
         SQL 실행 (동기)
+
+        1. 먼저 COUNT 쿼리로 전체 건수 확인
+        2. max_rows 초과 시 데이터 조회 스킵 (다운로드로 유도)
+        3. max_rows 이하면 데이터 조회
 
         Args:
             sql: 실행할 SQL (검증 완료된 것)
@@ -412,6 +454,26 @@ class TextToSqlService:
         start_time = time.time()
 
         try:
+            # 1. 먼저 COUNT 쿼리로 전체 건수 확인
+            total_count = self._get_count(sql)
+            logger.info(f"Total count: {total_count}, max_rows: {self.max_rows}")
+
+            # 2. max_rows 초과면 데이터 조회 스킵 (다운로드로 유도)
+            if total_count > self.max_rows:
+                execution_time_ms = (time.time() - start_time) * 1000
+                logger.info(f"Data exceeds max_rows ({total_count} > {self.max_rows}), skipping data fetch")
+
+                return SqlResult(
+                    success=True,
+                    data=[],                        # 데이터 없음
+                    row_count=0,
+                    sql=sql,
+                    execution_time_ms=execution_time_ms,
+                    total_count=total_count,        # 전체 건수만 제공
+                    is_truncated=True               # 잘림 표시
+                )
+
+            # 3. max_rows 이하면 기존대로 실행
             with self._get_readonly_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(sql)
@@ -435,7 +497,9 @@ class TextToSqlService:
                         data=data,
                         row_count=len(data),
                         sql=sql,
-                        execution_time_ms=execution_time_ms
+                        execution_time_ms=execution_time_ms,
+                        total_count=total_count,    # 전체 건수
+                        is_truncated=False
                     )
 
         except psycopg.Error as e:
@@ -515,6 +579,8 @@ class TextToSqlService:
             "success": result.success,
             "data": result.data,
             "rowCount": result.row_count,
+            "totalCount": result.total_count,       # 전체 건수
+            "isTruncated": result.is_truncated,     # max_rows 초과 여부
             "sql": result.sql,
             "error": result.error,
             "executionTimeMs": result.execution_time_ms

@@ -86,11 +86,11 @@ class SqlValidator:
         r'\bset_config\b',
     ]
 
-    def __init__(self, max_rows: int = 1000, default_limit: int = 100):
+    def __init__(self, max_rows: int = 1000, default_limit: int = 1000):
         """
         Args:
             max_rows: LIMIT 최대값 (초과 시 강제 조정)
-            default_limit: LIMIT 없을 때 기본값
+            default_limit: LIMIT 없을 때 기본값 (max_rows와 동일하게 설정)
         """
         self.max_rows = max_rows
         self.default_limit = default_limit
@@ -306,7 +306,7 @@ class SqlValidator:
 _validator_instance: Optional[SqlValidator] = None
 
 
-def get_sql_validator(max_rows: int = 1000, default_limit: int = 100) -> SqlValidator:
+def get_sql_validator(max_rows: int = 1000, default_limit: int = 1000) -> SqlValidator:
     """SqlValidator 싱글톤 인스턴스 반환"""
     global _validator_instance
     if _validator_instance is None:

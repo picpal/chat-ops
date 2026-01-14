@@ -77,13 +77,51 @@ See: infra/docker/.env.example
 
 ## 8. Agent 사용 가이드
 
-프로젝트에 설정된 에이전트를 적극 활용하세요.
+프로젝트에 설정된 에이전트를 **적극 활용**하세요.
+
+### Agent First 원칙 (필수)
+
+**"작업 전, 해당 에이전트가 있는지 먼저 확인하라"**
+
+```
+작업 요청 → 에이전트 존재 확인 → 있으면 에이전트 사용 → 없으면 직접 작업
+```
+
+#### 에이전트 사용 판단 기준
+
+| 질문 | Yes → 에이전트 사용 |
+|------|---------------------|
+| 코드 수정 후 테스트가 필요한가? | `backend-api-tester`, `ui-e2e-tester` |
+| 특정 서비스(AI/Core API/UI) 코드를 수정하는가? | `ai-orchestrator-dev`, `core-api-dev`, `frontend-developer` |
+| 서버 상태 확인/제어가 필요한가? | `server-ops-controller` |
+| 오류 원인 파악이 필요한가? | `log-analyzer` |
+| 문서 작성이 필요한가? | `project-doc-writer` |
+
+#### 직접 작업해도 되는 경우
+- 단일 파일의 1-2줄 단순 수정 (오타, 설정값 변경)
+- 파일 내용 단순 조회
+- 간단한 질문 응답
+
+#### 에이전트 활용 이점
+- **전문화된 컨텍스트**: 각 에이전트는 해당 도메인의 베스트 프랙티스 내장
+- **일관된 워크플로우**: 수정 → 테스트 → 검증 자동화
+- **품질 보장**: 테스트 누락 방지, 문서화 자동화
+
+#### 병렬 에이전트 활용
+독립적인 작업은 **병렬로 에이전트 실행**하여 효율성 극대화:
+```
+예: AI Orchestrator 수정 + Core API 수정이 동시에 필요한 경우
+→ ai-orchestrator-dev와 core-api-dev를 병렬 실행
+```
 
 ### 에이전트 목록 및 사용 시점
 
 | 에이전트 | 용도 | 사용 시점 |
 |---------|------|----------|
 | server-ops-controller | 서버 시작/중지/재시작/상태확인 | 개발 시작/종료, 서비스 문제 발생 시 |
+| ai-orchestrator-dev | AI Orchestrator (Python/FastAPI) 개발 | LLM 프롬프트, Text-to-SQL, RAG, SQL Validator 작업 |
+| core-api-dev | Core API (Java/Spring Boot) 개발 | REST API, QueryPlan 검증, SQL Builder, DB 마이그레이션 |
+| backend-api-tester | 백엔드 API 테스트 | 단위/통합 테스트, API 검증 (E2E 제외) |
 | ui-e2e-tester | UI 기능 테스트 (Playwright) | UI 기능 구현 완료 후 검증 |
 | log-analyzer | 로그 분석 및 디버깅 | 오류 발생 시, 동작 확인 필요 시 |
 | frontend-developer | React UI 개발 | 프론트엔드 컴포넌트/페이지 작업 |
@@ -93,12 +131,27 @@ See: infra/docker/.env.example
 
 ### 워크플로우 예시
 
-1. **개발 시작**: server-ops-controller로 서버 시작
-2. **기능 개발**: frontend-developer (UI) 또는 직접 수정 (백엔드)
-3. **테스트**: ui-e2e-tester로 E2E 테스트
-4. **오류 발생**: log-analyzer로 로그 분석
-5. **문서화**: project-doc-writer로 문서 작성
-6. **개발 종료**: server-ops-controller로 서버 중지
+**프론트엔드 개발:**
+| 단계 | 에이전트 | 필수 |
+|------|----------|------|
+| 1. 서버 시작 | `server-ops-controller` | O |
+| 2. UI 컴포넌트 작업 | `frontend-developer` | O |
+| 3. E2E 테스트 | `ui-e2e-tester` | O |
+| 4. 오류 분석 (필요시) | `log-analyzer` | - |
+| 5. 문서화 (필요시) | `project-doc-writer` | - |
+| 6. 서버 중지 | `server-ops-controller` | O |
+
+**백엔드 개발:**
+| 단계 | 에이전트 | 필수 |
+|------|----------|------|
+| 1. 서버 시작 | `server-ops-controller` | O |
+| 2. AI Orchestrator 작업 | `ai-orchestrator-dev` | O |
+| 3. Core API 작업 | `core-api-dev` | O |
+| 4. 테스트 실행 | `backend-api-tester` | O |
+| 5. 오류 분석 (필요시) | `log-analyzer` | - |
+| 6. 서버 중지 | `server-ops-controller` | O |
+
+**중요: 코드 수정 후 반드시 해당 테스트 에이전트 실행**
 
 ### 주의사항
 
