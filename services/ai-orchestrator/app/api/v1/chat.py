@@ -1,6 +1,9 @@
 """
 Chat API - Step 6: LangChain + Natural Language Processing
 자연어 → QueryPlan → Core API → RenderSpec
+
+Text-to-SQL 모드 추가:
+SQL_ENABLE_TEXT_TO_SQL=true 설정 시 AI가 직접 SQL을 생성하여 읽기 전용 DB에서 실행
 """
 
 from fastapi import APIRouter, HTTPException
@@ -12,6 +15,9 @@ import os
 import re
 import uuid
 from datetime import datetime
+
+# Text-to-SQL 모드 플래그
+ENABLE_TEXT_TO_SQL = os.getenv("SQL_ENABLE_TEXT_TO_SQL", "false").lower() == "true"
 
 
 def to_camel(string: str) -> str:
@@ -291,7 +297,12 @@ from app.services.query_planner import get_query_planner, IntentType
 from app.services.render_composer import get_render_composer
 from app.services.rag_service import get_rag_service
 
+# Text-to-SQL 모드용 import (조건부)
+if ENABLE_TEXT_TO_SQL:
+    from app.services.text_to_sql import get_text_to_sql_service
+
 logger = logging.getLogger(__name__)
+logger.info(f"Text-to-SQL mode: {'ENABLED' if ENABLE_TEXT_TO_SQL else 'DISABLED'}")
 
 router = APIRouter()
 
@@ -341,12 +352,19 @@ async def chat(request: ChatRequest):
     """
     Step 6: LangChain 기반 자연어 처리
 
-    Flow:
+    Flow (기존 QueryPlan 모드):
     1. 사용자 메시지 수신
     2. QueryPlannerService로 자연어 → QueryPlan 변환
     3. Core API 호출
     4. RenderComposerService로 QueryResult → RenderSpec 변환
     5. RenderSpec 반환
+
+    Flow (Text-to-SQL 모드, SQL_ENABLE_TEXT_TO_SQL=true):
+    1. 사용자 메시지 수신
+    2. TextToSqlService로 자연어 → SQL 변환
+    3. SQL 검증 (SqlValidator)
+    4. 읽기 전용 DB에서 직접 실행
+    5. 결과를 RenderSpec으로 변환
     """
     start_time = datetime.utcnow()
     conversation_id = request.conversation_id or str(uuid.uuid4())
@@ -358,6 +376,12 @@ async def chat(request: ChatRequest):
         "requestId": request_id,
         "stages": []
     }
+
+    # ========================================
+    # Text-to-SQL 모드 분기
+    # ========================================
+    if ENABLE_TEXT_TO_SQL:
+        return await handle_text_to_sql(request, request_id, start_time)
 
     try:
         # Stage 0: Intent Classification (2단계 분류)
@@ -989,3 +1013,254 @@ async def search_documents(query: str, k: int = 3):
             "query": query,
             "error": str(e)
         }
+
+
+# ============================================
+# Text-to-SQL 모드 핸들러
+# ============================================
+
+async def handle_text_to_sql(
+    request: ChatRequest,
+    request_id: str,
+    start_time: datetime
+) -> ChatResponse:
+    """
+    Text-to-SQL 모드 처리
+
+    AI가 직접 SQL을 생성하고 읽기 전용 DB에서 실행합니다.
+    """
+    logger.info(f"[{request_id}] Text-to-SQL mode: processing")
+
+    try:
+        text_to_sql = get_text_to_sql_service()
+
+        # 대화 이력 변환 (Text-to-SQL 형식)
+        sql_history = build_sql_history(request.conversation_history)
+
+        # SQL 생성 및 실행
+        result = await text_to_sql.query(
+            question=request.message,
+            conversation_history=sql_history,
+            retry_on_error=True
+        )
+
+        # 실행 시간 계산
+        total_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+
+        if result["success"]:
+            # 성공: 데이터를 RenderSpec으로 변환
+            render_spec = compose_sql_render_spec(result, request.message)
+            query_result = {
+                "requestId": request_id,
+                "status": "success",
+                "data": {
+                    "rows": result["data"],
+                    "aggregations": {}
+                },
+                "metadata": {
+                    "executionTimeMs": int(result.get("executionTimeMs") or 0),
+                    "rowsReturned": result["rowCount"],
+                    "totalRows": result["rowCount"],
+                    "dataSource": "text_to_sql"
+                }
+            }
+        else:
+            # 실패: 에러 RenderSpec
+            render_spec = {
+                "type": "text",
+                "title": "쿼리 실행 오류",
+                "text": {
+                    "content": f"## 쿼리 실행 중 오류가 발생했습니다\n\n"
+                              f"**질문**: {request.message}\n\n"
+                              f"**오류**: {result.get('error', '알 수 없는 오류')}\n\n"
+                              f"**생성된 SQL**:\n```sql\n{result.get('sql', 'N/A')}\n```",
+                    "format": "markdown"
+                },
+                "metadata": {
+                    "requestId": request_id,
+                    "generatedAt": datetime.utcnow().isoformat() + "Z",
+                    "mode": "text_to_sql"
+                }
+            }
+            query_result = {
+                "requestId": request_id,
+                "status": "error",
+                "data": {"rows": [], "aggregations": {}},
+                "metadata": {
+                    "executionTimeMs": total_time_ms,
+                    "rowsReturned": 0,
+                    "dataSource": "text_to_sql"
+                },
+                "error": {
+                    "code": "SQL_EXECUTION_ERROR",
+                    "message": result.get("error", "Unknown error")
+                }
+            }
+
+        logger.info(f"[{request_id}] Text-to-SQL completed: success={result['success']}, rows={result['rowCount']}")
+
+        return ChatResponse(
+            request_id=request_id,
+            render_spec=render_spec,
+            query_result=query_result,
+            query_plan={
+                "mode": "text_to_sql",
+                "sql": result.get("sql"),
+                "requestId": request_id
+            },
+            ai_message=f"'{request.message}'에 대한 결과입니다." if result["success"] else "쿼리 실행 중 오류가 발생했습니다.",
+            timestamp=datetime.utcnow().isoformat() + "Z"
+        )
+
+    except Exception as e:
+        logger.error(f"[{request_id}] Text-to-SQL error: {e}", exc_info=True)
+        total_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+
+        error_render_spec = {
+            "type": "text",
+            "title": "처리 중 오류 발생",
+            "text": {
+                "content": f"## Text-to-SQL 처리 중 오류가 발생했습니다\n\n"
+                          f"**요청**: {request.message}\n\n"
+                          f"**오류**: {str(e)}\n\n"
+                          f"잠시 후 다시 시도해주세요.",
+                "format": "markdown"
+            },
+            "metadata": {
+                "requestId": request_id,
+                "generatedAt": datetime.utcnow().isoformat() + "Z",
+                "mode": "text_to_sql"
+            }
+        }
+
+        return ChatResponse(
+            request_id=request_id,
+            render_spec=error_render_spec,
+            query_result={
+                "requestId": request_id,
+                "status": "error",
+                "data": {"rows": [], "aggregations": {}},
+                "metadata": {"executionTimeMs": total_time_ms, "rowsReturned": 0}
+            },
+            query_plan={"mode": "text_to_sql", "error": str(e)},
+            ai_message=f"처리 중 오류가 발생했습니다: {str(e)}",
+            timestamp=datetime.utcnow().isoformat() + "Z"
+        )
+
+
+def build_sql_history(conversation_history: Optional[List[ChatMessageItem]]) -> List[Dict[str, str]]:
+    """대화 이력을 Text-to-SQL 형식으로 변환"""
+    if not conversation_history:
+        return []
+
+    sql_history = []
+    for msg in conversation_history[-10:]:  # 최근 10개만
+        entry = {
+            "role": msg.role,
+            "content": msg.content
+        }
+        # assistant 메시지에 SQL 정보가 있으면 포함
+        if msg.role == "assistant" and msg.queryPlan:
+            if msg.queryPlan.get("mode") == "text_to_sql" and msg.queryPlan.get("sql"):
+                entry["sql"] = msg.queryPlan.get("sql")
+        sql_history.append(entry)
+
+    return sql_history
+
+
+def compose_sql_render_spec(result: Dict[str, Any], question: str) -> Dict[str, Any]:
+    """SQL 실행 결과를 RenderSpec으로 변환"""
+    data = result.get("data", [])
+    row_count = result.get("rowCount", 0)
+
+    if not data:
+        return {
+            "type": "text",
+            "title": "조회 결과",
+            "text": {
+                "content": "조회 결과가 없습니다.",
+                "format": "plain"
+            },
+            "metadata": {
+                "sql": result.get("sql"),
+                "executionTimeMs": result.get("executionTimeMs")
+            }
+        }
+
+    # 단일 행 + 집계 결과처럼 보이면 텍스트로 표시
+    if row_count == 1 and len(data[0]) <= 3:
+        row = data[0]
+        # 키-값 쌍으로 표시
+        content_parts = []
+        for key, value in row.items():
+            # 금액 포맷팅
+            if isinstance(value, (int, float)) and any(kw in key.lower() for kw in ["amount", "sum", "total", "count", "avg"]):
+                if value >= 1000000:
+                    formatted = f"₩{value:,.0f} ({value/1000000:.2f}M)"
+                elif value >= 1000:
+                    formatted = f"₩{value:,.0f}"
+                else:
+                    formatted = f"{value:,.2f}" if isinstance(value, float) else f"{value:,}"
+                content_parts.append(f"**{key}**: {formatted}")
+            else:
+                content_parts.append(f"**{key}**: {value}")
+
+        return {
+            "type": "text",
+            "title": "집계 결과",
+            "text": {
+                "content": "\n".join(content_parts),
+                "format": "markdown"
+            },
+            "metadata": {
+                "sql": result.get("sql"),
+                "executionTimeMs": result.get("executionTimeMs"),
+                "mode": "text_to_sql"
+            }
+        }
+
+    # 다중 행: 테이블로 표시
+    if data:
+        columns = list(data[0].keys())
+        column_defs = []
+        for col in columns:
+            col_def = {
+                "field": col,
+                "headerName": col.replace("_", " ").title()
+            }
+            # 금액 필드 감지
+            if any(kw in col.lower() for kw in ["amount", "fee", "net", "total", "price"]):
+                col_def["type"] = "currency"
+                col_def["currencyCode"] = "KRW"
+            # 날짜 필드 감지
+            elif any(kw in col.lower() for kw in ["date", "time", "at", "created", "updated"]):
+                col_def["type"] = "datetime"
+            column_defs.append(col_def)
+
+        return {
+            "type": "table",
+            "title": f"조회 결과 ({row_count}건)",
+            "table": {
+                "columns": column_defs,
+                "data": data,
+                "pagination": {
+                    "enabled": row_count > 20,
+                    "pageSize": 20,
+                    "totalRows": row_count
+                }
+            },
+            "metadata": {
+                "sql": result.get("sql"),
+                "executionTimeMs": result.get("executionTimeMs"),
+                "mode": "text_to_sql"
+            }
+        }
+
+    return {
+        "type": "text",
+        "title": "결과",
+        "text": {
+            "content": f"조회 완료: {row_count}건",
+            "format": "plain"
+        }
+    }

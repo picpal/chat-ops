@@ -97,6 +97,11 @@ services:
       - CLARIFICATION_MODEL=${CLARIFICATION_MODEL:-gpt-4o}
       - RAG_ENABLED=${RAG_ENABLED:-true}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Text-to-SQL 모드 설정
+      - SQL_ENABLE_TEXT_TO_SQL=${SQL_ENABLE_TEXT_TO_SQL:-false}
+      - DATABASE_READONLY_URL=postgresql://chatops_readonly:${POSTGRES_READONLY_PASS:-readonly_pass}@postgres:5432/${POSTGRES_DB:-chatops}
+      - SQL_QUERY_TIMEOUT_SECONDS=${SQL_QUERY_TIMEOUT_SECONDS:-30}
+      - SQL_MAX_ROWS=${SQL_MAX_ROWS:-1000}
     ports:
       - "8000:8000"
     depends_on:
