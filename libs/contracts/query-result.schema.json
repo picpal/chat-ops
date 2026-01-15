@@ -65,11 +65,11 @@
     },
     "pagination": {
       "type": "object",
-      "description": "페이징 정보 (결과가 여러 페이지일 때)",
+      "description": "페이징 정보 (list/search 작업 시 항상 포함)",
       "properties": {
         "queryToken": {
           "type": "string",
-          "description": "다음 페이지 조회용 토큰"
+          "description": "다음 페이지 조회용 토큰 (hasMore=true일 때만 존재)"
         },
         "hasMore": {
           "type": "boolean",
@@ -78,6 +78,18 @@
         "currentPage": {
           "type": "integer",
           "description": "현재 페이지 번호 (1부터 시작)"
+        },
+        "totalPages": {
+          "type": "integer",
+          "description": "전체 페이지 수"
+        },
+        "totalRows": {
+          "type": "integer",
+          "description": "전체 행 개수"
+        },
+        "pageSize": {
+          "type": "integer",
+          "description": "페이지당 행 개수"
         }
       }
     },

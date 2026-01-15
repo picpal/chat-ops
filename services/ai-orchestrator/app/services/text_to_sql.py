@@ -20,6 +20,175 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================
+# 집계 쿼리 감지 및 컨텍스트 생성
+# ============================================
+
+# 집계 함수 패턴 (대소문자 무관)
+AGGREGATION_FUNCTIONS = {
+    "SUM": r'\bSUM\s*\(\s*([^)]+)\s*\)',
+    "COUNT": r'\bCOUNT\s*\(\s*([^)]+)\s*\)',
+    "AVG": r'\bAVG\s*\(\s*([^)]+)\s*\)',
+    "MAX": r'\bMAX\s*\(\s*([^)]+)\s*\)',
+    "MIN": r'\bMIN\s*\(\s*([^)]+)\s*\)',
+}
+
+
+@dataclass
+class AggregationInfo:
+    """단일 집계 함수 정보"""
+    function: str           # SUM, COUNT, AVG, MAX, MIN
+    target_column: str      # 집계 대상 컬럼 (예: amount, *)
+    alias: Optional[str]    # AS 별칭 (있으면)
+
+
+@dataclass
+class AggregationContext:
+    """집계 쿼리 컨텍스트 메타데이터"""
+    query_type: str                     # "NEW_QUERY" 또는 "REFINEMENT"
+    based_on_filters: List[str]         # 적용된 WHERE 조건들
+    source_row_count: Optional[int]     # 이전 쿼리 결과 건수 (있으면)
+    aggregations: List[AggregationInfo] # 감지된 집계 함수들
+    has_group_by: bool                  # GROUP BY 포함 여부
+    group_by_columns: List[str]         # GROUP BY 컬럼들
+
+
+def detect_aggregation_functions(sql: str) -> List[AggregationInfo]:
+    """
+    SQL에서 집계 함수들을 감지
+
+    Args:
+        sql: SQL 쿼리 문자열
+
+    Returns:
+        감지된 집계 함수 정보 리스트
+    """
+    aggregations = []
+
+    # SELECT 절 추출
+    select_match = re.search(r'\bSELECT\s+(.+?)\s+FROM\b', sql, re.IGNORECASE | re.DOTALL)
+    if not select_match:
+        return aggregations
+
+    select_clause = select_match.group(1)
+
+    for func_name, pattern in AGGREGATION_FUNCTIONS.items():
+        # 해당 집계 함수 찾기
+        matches = re.finditer(pattern, select_clause, re.IGNORECASE)
+        for match in matches:
+            target_column = match.group(1).strip()
+
+            # AS 별칭 찾기 (집계 함수 뒤에 AS 또는 공백 후 별칭)
+            # 예: SUM(amount) AS total_amount 또는 SUM(amount) total_amount
+            full_expr = match.group(0)
+            alias = None
+
+            # select_clause에서 이 표현식 이후의 부분 찾기
+            expr_end_pos = select_clause.find(full_expr) + len(full_expr)
+            remaining = select_clause[expr_end_pos:].strip()
+
+            # AS 키워드 확인
+            as_match = re.match(r'^(?:AS\s+)?([a-zA-Z_][a-zA-Z0-9_]*)', remaining, re.IGNORECASE)
+            if as_match:
+                potential_alias = as_match.group(1).upper()
+                # FROM, WHERE 등 키워드가 아닌 경우만 별칭으로 인정
+                if potential_alias not in ('FROM', 'WHERE', 'GROUP', 'ORDER', 'LIMIT', 'HAVING', 'AND', 'OR'):
+                    alias = as_match.group(1)
+
+            aggregations.append(AggregationInfo(
+                function=func_name,
+                target_column=target_column,
+                alias=alias
+            ))
+
+    return aggregations
+
+
+def detect_group_by(sql: str) -> Tuple[bool, List[str]]:
+    """
+    SQL에서 GROUP BY 절 감지
+
+    Args:
+        sql: SQL 쿼리 문자열
+
+    Returns:
+        (has_group_by, group_by_columns) 튜플
+    """
+    # GROUP BY 절 추출
+    group_by_match = re.search(
+        r'\bGROUP\s+BY\s+(.+?)(?=\s*(?:HAVING|ORDER\s+BY|LIMIT|OFFSET|;|$))',
+        sql,
+        re.IGNORECASE | re.DOTALL
+    )
+
+    if not group_by_match:
+        return (False, [])
+
+    group_by_clause = group_by_match.group(1).strip()
+
+    # 컬럼 분리 (쉼표로)
+    columns = [col.strip() for col in group_by_clause.split(',')]
+
+    return (True, columns)
+
+
+def build_aggregation_context(
+    sql: str,
+    is_refinement: bool = False,
+    previous_row_count: Optional[int] = None
+) -> Optional[AggregationContext]:
+    """
+    SQL에서 집계 컨텍스트 생성
+
+    Args:
+        sql: SQL 쿼리 문자열
+        is_refinement: 이전 쿼리의 세분화 여부
+        previous_row_count: 이전 쿼리 결과 건수
+
+    Returns:
+        AggregationContext 또는 None (집계 쿼리가 아닌 경우)
+    """
+    # 집계 함수 감지
+    aggregations = detect_aggregation_functions(sql)
+
+    if not aggregations:
+        return None  # 집계 쿼리가 아님
+
+    # WHERE 조건 추출
+    where_conditions = extract_where_conditions(sql)
+
+    # GROUP BY 감지
+    has_group_by, group_by_columns = detect_group_by(sql)
+
+    return AggregationContext(
+        query_type="REFINEMENT" if is_refinement else "NEW_QUERY",
+        based_on_filters=where_conditions,
+        source_row_count=previous_row_count,
+        aggregations=aggregations,
+        has_group_by=has_group_by,
+        group_by_columns=group_by_columns
+    )
+
+
+def aggregation_context_to_dict(ctx: AggregationContext) -> Dict[str, Any]:
+    """AggregationContext를 딕셔너리로 변환 (JSON 직렬화용)"""
+    return {
+        "queryType": ctx.query_type,
+        "basedOnFilters": ctx.based_on_filters,
+        "sourceRowCount": ctx.source_row_count,
+        "aggregations": [
+            {
+                "function": agg.function,
+                "targetColumn": agg.target_column,
+                "alias": agg.alias
+            }
+            for agg in ctx.aggregations
+        ],
+        "hasGroupBy": ctx.has_group_by,
+        "groupByColumns": ctx.group_by_columns
+    }
+
+
+# ============================================
 # WHERE 조건 추출 및 병합 유틸리티
 # ============================================
 
@@ -319,6 +488,8 @@ class ConversationContext:
     # 연속 대화용 추가 필드
     accumulated_where_conditions: List[str] = field(default_factory=list)
     is_refinement: bool = False  # True면 이전 WHERE 조건 유지 필요
+    # 대화 기반 맥락 처리용 전체 대화 이력
+    conversation_history: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class TextToSqlService:
@@ -429,31 +600,38 @@ class TextToSqlService:
         conversation_context: Optional[ConversationContext] = None,
         rag_context: str = ""
     ) -> str:
-        """SQL 생성 프롬프트 구성"""
+        """
+        SQL 생성 프롬프트 구성
+
+        대화 기반 맥락 처리 방식:
+        - 규칙 기반 강제 대신 자연스러운 대화 흐름으로 컨텍스트 전달
+        - Claude Code처럼 대화 이력을 명확하게 보여주어 LLM이 맥락을 이해하도록 함
+        """
         prompt_parts = []
 
-        # 시스템 지시
-        prompt_parts.append("""당신은 PostgreSQL SQL 전문가입니다.
+        # 현재 날짜 정보 추가
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        prompt_parts.append(f"현재 날짜: {current_date}")
+
+        # 시스템 지시 (간결하게)
+        prompt_parts.append("""
+당신은 PostgreSQL SQL 전문가입니다.
 사용자의 자연어 질문을 분석하여 정확한 SELECT 쿼리를 생성합니다.
 
-규칙:
-1. SELECT 문만 생성 (INSERT, UPDATE, DELETE 금지)
-2. 테이블/컬럼명은 snake_case 사용 (예: payment_key, merchant_id)
-3. 문자열 비교 시 정확한 값 사용 (예: status = 'DONE')
-4. 시간 범위 조회 규칙:
-   - 기본값: created_at 사용 (전체 데이터 조회, 대기/실패 상태 포함)
-   - "승인일 기준", "매출 기준" 명시 시: approved_at 사용
-   - "정산 대상" 명시 시: approved_at 사용 + status='DONE' 조건 추가
-   - 예: "오늘 결제 내역" → WHERE created_at >= '2024-01-01'
-   - 예: "오늘 승인된 매출" → WHERE approved_at >= '2024-01-01' AND status = 'DONE'
-5. LIMIT 규칙:
-   - 사용자가 명시적으로 건수를 지정한 경우에만 LIMIT 추가 (예: "10건만", "상위 100개")
-   - 건수 지정이 없으면 LIMIT 없이 생성 (시스템이 자동으로 처리함)
-6. 금액 집계 시 SUM, COUNT, AVG 등 적절히 활용
+## 기본 규칙
+- SELECT 문만 생성 (INSERT, UPDATE, DELETE 금지)
+- 테이블/컬럼명은 snake_case 사용
+- 문자열 비교 시 정확한 값 사용 (예: status = 'DONE')
+- LIMIT: 사용자가 건수를 명시한 경우에만 추가
 
-응답 형식:
-- SQL 쿼리만 반환 (코드 블록, 설명 없이)
-- 세미콜론으로 끝내기
+## 시간 조회 규칙
+- 기본: created_at 사용
+- "승인일 기준", "매출 기준" → approved_at 사용
+- "오늘" → created_at >= '현재날짜'
+- "최근 N개월" → created_at >= NOW() - INTERVAL 'N months'
+
+## 응답 형식
+SQL 쿼리만 반환 (코드 블록, 설명 없이), 세미콜론으로 끝내기
 """)
 
         # 스키마 정보
@@ -463,55 +641,91 @@ class TextToSqlService:
         if rag_context:
             prompt_parts.append(f"\n## 참고 문서\n{rag_context}")
 
-        # 연속 대화 컨텍스트
-        if conversation_context and conversation_context.previous_sql:
-            # 참조 모드 (is_refinement=True)일 때 강화된 지시
-            if conversation_context.is_refinement and conversation_context.accumulated_where_conditions:
-                # 누적된 WHERE 조건을 명시적으로 제공
-                conditions_str = "\n".join([f"  - {cond}" for cond in conversation_context.accumulated_where_conditions])
-                prompt_parts.append(f"""
-## 연속 대화 처리 규칙 (매우 중요!)
+        # 대화 기반 컨텍스트 (자연스러운 대화 형태)
+        if conversation_context and conversation_context.conversation_history:
+            prompt_parts.append(self._build_conversation_flow(conversation_context))
 
-사용자가 "이중에", "여기서", "그중" 등의 참조 표현을 사용했습니다.
-이전 쿼리 결과를 세분화하려는 의도입니다.
-
-### 반드시 유지해야 할 이전 WHERE 조건:
-{conditions_str}
-
-### 이전 SQL:
-```sql
-{conversation_context.previous_sql}
-```
-
-### 처리 규칙:
-1. 위 WHERE 조건들을 **반드시 모두 유지**하세요
-2. 새 조건은 **AND로 추가**하세요
-3. **절대로 이전 조건을 제거하지 마세요!**
-4. 동일 필드에 새 조건이 있으면 새 조건으로 대체하세요
-
-### 예시:
-- 이전: WHERE created_at >= '2024-01-01'
-- 현재 질문: "이중 mer_001만"
-- 결과: WHERE created_at >= '2024-01-01' AND merchant_id = 'mer_001'
-""")
-            else:
-                # 기존 로직 (참조 표현 없음)
-                prompt_parts.append(f"""
-## 이전 대화 컨텍스트
-이전 질문: {conversation_context.previous_question}
-이전 SQL:
-```sql
-{conversation_context.previous_sql}
-```
-이전 결과 요약: {conversation_context.previous_result_summary or '결과 있음'}
-
-위 컨텍스트를 참고하여, 현재 질문이 이전 쿼리의 조건 변경/추가를 요청하는 경우 이전 SQL을 수정하세요.
+        # SQL 생성 가이드라인 (규칙 대신 가이드)
+        prompt_parts.append("""
+## SQL 생성 가이드
+- "이중에", "여기서", "그중" → 직전 SQL의 WHERE 조건 유지 + 새 조건 AND로 추가
+- "합산", "평균", "개수" → 직전 조건 유지하며 집계 함수 적용
+- 새 조회 요청 → 새로운 WHERE 조건으로 시작
 """)
 
         # 현재 질문
         prompt_parts.append(f"\n## 현재 질문\n{question}")
 
         return "\n".join(prompt_parts)
+
+    def _build_conversation_flow(self, context: ConversationContext) -> str:
+        """
+        대화 이력을 자연스러운 흐름으로 구성
+
+        Phase 4 개선:
+        - 누적된 WHERE 조건을 명시적으로 강조
+        - 4단계+ 체이닝에서도 모든 조건이 유지되도록 LLM에게 명확한 지시
+
+        Claude Code처럼 대화 이력을 명확하게 보여주어
+        LLM이 맥락을 자연스럽게 이해하도록 합니다.
+        """
+        if not context.conversation_history:
+            return ""
+
+        parts = ["\n## 대화 이력"]
+        turn_number = 1
+
+        for entry in context.conversation_history:
+            role = entry.get("role", "")
+            content = entry.get("content", "")
+            sql = entry.get("sql")
+            row_count = entry.get("rowCount")
+            where_conditions = entry.get("whereConditions", [])
+
+            if role == "user":
+                parts.append(f"\n[{turn_number}] User: {content}")
+            elif role == "assistant" and sql:
+                # SQL과 결과 건수를 함께 표시
+                result_info = f"결과: {row_count}건" if row_count is not None else "결과: 있음"
+                parts.append(f"    -> SQL: {sql}")
+                parts.append(f"    -> {result_info}")
+                # Phase 4: WHERE 조건도 각 턴별로 표시 (LLM이 조건 흐름을 추적하도록)
+                if where_conditions:
+                    parts.append(f"    -> WHERE 조건: {where_conditions}")
+                turn_number += 1
+
+        # Phase 4: 누적된 WHERE 조건을 강조 표시 (4단계+ 체이닝 핵심)
+        if context.accumulated_where_conditions:
+            parts.append("\n" + "=" * 50)
+            parts.append("### [중요] 현재까지 누적된 모든 WHERE 조건 (필수 유지)")
+            parts.append("=" * 50)
+            for i, cond in enumerate(context.accumulated_where_conditions, 1):
+                parts.append(f"  {i}. `{cond}`")
+            parts.append("")
+            parts.append("**위 조건들은 반드시 유지해야 합니다.**")
+            parts.append("새 필터 추가 시: 위 조건 + 새 조건을 AND로 연결하세요.")
+            parts.append("=" * 50)
+
+        # 컨텍스트 힌트 (참조 표현 감지 시)
+        if context.is_refinement:
+            parts.append("""
+[참조 표현 감지됨]
+사용자가 이전 결과를 참조하고 있습니다.
+- 위의 "누적된 WHERE 조건"을 모두 포함
+- 새로운 필터만 AND로 추가
+- 기존 조건 제거 금지
+""")
+        else:
+            # 참조 표현이 없어도 대화 흐름상 조건 유지 권장
+            if context.accumulated_where_conditions:
+                parts.append("""
+[대화 흐름 유지]
+명시적 참조 표현은 없지만, 대화 흐름상 이전 조건을 유지하는 것이 자연스럽습니다.
+- 완전히 새로운 주제가 아니라면 위 조건들을 유지하세요
+- 사용자가 "새로", "다시", "전체" 등을 언급하면 새 쿼리로 시작
+""")
+
+        return "\n".join(parts)
 
     async def generate_sql(
         self,
@@ -738,6 +952,20 @@ class TextToSqlService:
             if validation_result.is_valid:
                 result = self.execute_sql(validation_result.sanitized_sql)
 
+        # 집계 컨텍스트 생성 (집계 쿼리인 경우에만)
+        aggregation_context = None
+        previous_row_count = self._get_previous_row_count(conversation_history)
+
+        agg_ctx = build_aggregation_context(
+            sql=result.sql,
+            is_refinement=is_refinement,
+            previous_row_count=previous_row_count
+        )
+
+        if agg_ctx:
+            aggregation_context = aggregation_context_to_dict(agg_ctx)
+            logger.info(f"Aggregation query detected: {aggregation_context}")
+
         return {
             "success": result.success,
             "data": result.data,
@@ -746,19 +974,30 @@ class TextToSqlService:
             "isTruncated": result.is_truncated,     # max_rows 초과 여부
             "sql": result.sql,
             "error": result.error,
-            "executionTimeMs": result.execution_time_ms
+            "executionTimeMs": result.execution_time_ms,
+            "isAggregation": agg_ctx is not None,   # 집계 쿼리 여부
+            "aggregationContext": aggregation_context  # 집계 컨텍스트 (None이면 일반 쿼리)
         }
 
     def _build_conversation_context(
         self,
-        conversation_history: Optional[List[Dict[str, str]]],
+        conversation_history: Optional[List[Dict[str, Any]]],
         is_refinement: bool = False
     ) -> Optional[ConversationContext]:
         """
         대화 이력에서 컨텍스트 추출
 
+        대화 기반 맥락 처리 방식:
+        - 전체 대화 이력을 저장하여 자연스러운 대화 흐름 구성
+        - rowCount 정보를 포함하여 LLM이 맥락을 이해하도록 함
+
+        Phase 2 개선:
+        - is_refinement 조건 제거: 항상 조건을 누적하여 LLM에게 전달
+        - whereConditions 필드 우선 사용 (Phase 1에서 명시적 저장된 값)
+        - 폴백으로 SQL에서 동적 추출
+
         Args:
-            conversation_history: 대화 이력
+            conversation_history: 대화 이력 [{role, content, sql?, rowCount?, whereConditions?}, ...]
             is_refinement: True면 이전 WHERE 조건 누적 필요 (참조 표현 감지됨)
 
         Returns:
@@ -770,10 +1009,13 @@ class TextToSqlService:
         # 마지막 assistant 메시지에서 SQL 추출
         previous_sql = None
         previous_question = None
+        previous_row_count = None
 
         for msg in reversed(conversation_history):
             if msg.get("role") == "assistant" and "sql" in msg:
-                previous_sql = msg.get("sql")
+                if previous_sql is None:
+                    previous_sql = msg.get("sql")
+                    previous_row_count = msg.get("rowCount")
             if msg.get("role") == "user" and not previous_question:
                 previous_question = msg.get("content")
                 break
@@ -781,30 +1023,74 @@ class TextToSqlService:
         if not previous_sql or not previous_question:
             return None
 
-        # 참조 모드일 때 WHERE 조건 누적 추출
+        # Phase 2: 항상 WHERE 조건 누적 (is_refinement 조건 제거)
+        # 4단계+ 체이닝에서 조건 유실 방지를 위해 항상 누적된 조건을 LLM에 전달
         accumulated_conditions = []
-        if is_refinement:
-            # 전체 대화 이력에서 SQL의 WHERE 조건 누적
-            for msg in conversation_history:
-                if msg.get("role") == "assistant" and "sql" in msg:
+
+        # 전체 대화 이력에서 WHERE 조건 누적
+        for msg in conversation_history:
+            if msg.get("role") == "assistant":
+                # Phase 1: whereConditions 필드 우선 사용 (명시적 저장된 값)
+                if "whereConditions" in msg and msg["whereConditions"]:
+                    conditions = msg["whereConditions"]
+                    logger.debug(f"Using pre-extracted whereConditions: {conditions}")
+                # 폴백: SQL에서 동적 추출
+                elif "sql" in msg:
                     sql = msg.get("sql", "")
                     conditions = extract_where_conditions(sql)
-                    if conditions:
-                        # 기존 조건과 병합 (동일 필드는 새 조건으로 대체)
-                        accumulated_conditions = merge_where_conditions(
-                            accumulated_conditions,
-                            conditions
-                        )
+                    logger.debug(f"Extracted conditions from SQL: {conditions}")
+                else:
+                    conditions = []
 
-            logger.info(f"Accumulated WHERE conditions (refinement mode): {accumulated_conditions}")
+                if conditions:
+                    # 기존 조건과 병합 (동일 필드는 새 조건으로 대체)
+                    accumulated_conditions = merge_where_conditions(
+                        accumulated_conditions,
+                        conditions
+                    )
+
+        if accumulated_conditions:
+            logger.info(f"Accumulated WHERE conditions ({len(accumulated_conditions)} conditions): {accumulated_conditions}")
+
+        # 결과 요약 생성 (rowCount 포함)
+        result_summary = None
+        if previous_row_count is not None:
+            result_summary = f"{previous_row_count}건 조회됨"
 
         return ConversationContext(
             previous_question=previous_question,
             previous_sql=previous_sql,
-            previous_result_summary=None,
+            previous_result_summary=result_summary,
             accumulated_where_conditions=accumulated_conditions,
-            is_refinement=is_refinement
+            is_refinement=is_refinement,
+            conversation_history=conversation_history  # 전체 대화 이력 저장
         )
+
+    def _get_previous_row_count(
+        self,
+        conversation_history: Optional[List[Dict[str, str]]]
+    ) -> Optional[int]:
+        """
+        이전 쿼리 결과의 행 수 추출
+
+        Args:
+            conversation_history: 대화 이력
+
+        Returns:
+            이전 쿼리 결과 행 수 또는 None
+        """
+        if not conversation_history:
+            return None
+
+        # 역순으로 탐색하여 가장 최근 assistant 메시지의 결과 건수 찾기
+        for msg in reversed(conversation_history):
+            if msg.get("role") == "assistant":
+                # rowCount 또는 totalCount 필드 확인
+                row_count = msg.get("rowCount") or msg.get("totalCount")
+                if row_count is not None:
+                    return row_count
+
+        return None
 
     def _summarize_result(self, data: List[Dict[str, Any]], max_rows: int = 3) -> str:
         """결과 요약 생성"""

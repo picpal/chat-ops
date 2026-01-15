@@ -280,10 +280,10 @@ class RenderComposerService:
             }
         }
 
-        # 페이지네이션 토큰 추가
-        if pagination.get("queryToken"):
+        # 서버 사이드 페이지네이션 정보 추가 (pagination 객체가 있으면 항상 포함)
+        if pagination:
             render_spec["pagination"] = {
-                "queryToken": pagination["queryToken"],
+                "queryToken": pagination.get("queryToken"),
                 "hasMore": pagination.get("hasMore", False),
                 "currentPage": pagination.get("currentPage", 1),
                 "totalRows": pagination.get("totalRows"),

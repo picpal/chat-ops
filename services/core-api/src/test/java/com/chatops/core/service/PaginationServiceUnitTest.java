@@ -73,7 +73,7 @@ class PaginationServiceUnitTest {
                 ));
 
             // When
-            String token = paginationService.createToken(queryPlan, currentRows, 10);
+            String token = paginationService.createToken(queryPlan, currentRows, 10, 100);
 
             // Then
             assertThat(token)
@@ -98,7 +98,7 @@ class PaginationServiceUnitTest {
                     List.of(10, 10)
                 ));
 
-            String token = paginationService.createToken(queryPlan, List.of(), 10);
+            String token = paginationService.createToken(queryPlan, List.of(), 10, 100);
 
             // When
             PaginationService.PaginationContext context = paginationService.getContext(token);
@@ -131,7 +131,7 @@ class PaginationServiceUnitTest {
                     List.of(10, 10)
                 ));
 
-            String firstToken = paginationService.createToken(queryPlan, List.of(), 10);
+            String firstToken = paginationService.createToken(queryPlan, List.of(), 10, 100);
             PaginationService.PaginationContext firstContext = paginationService.getContext(firstToken);
 
             // When
@@ -160,7 +160,7 @@ class PaginationServiceUnitTest {
                     List.of(10, 10)
                 ));
 
-            String firstToken = paginationService.createToken(queryPlan, List.of(), 10);
+            String firstToken = paginationService.createToken(queryPlan, List.of(), 10, 100);
             PaginationService.PaginationContext firstContext = paginationService.getContext(firstToken);
 
             // When
@@ -206,7 +206,7 @@ class PaginationServiceUnitTest {
                     List.of(10)
                 ));
 
-            String token = paginationService.createToken(queryPlan, List.of(), 10);
+            String token = paginationService.createToken(queryPlan, List.of(), 10, 100);
 
             // When
             paginationService.invalidateToken(token);
@@ -279,7 +279,7 @@ class PaginationServiceUnitTest {
                     List.of(10)
                 ));
 
-            paginationService.createToken(queryPlan, List.of(), 10);
+            paginationService.createToken(queryPlan, List.of(), 10, 100);
 
             // When & Then
             assertThatCode(() -> paginationService.cleanupExpiredTokens())

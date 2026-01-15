@@ -18,6 +18,7 @@ import re
 import uuid
 import csv
 import io
+import math
 from datetime import datetime
 
 
@@ -34,6 +35,7 @@ class ReferenceType(str, Enum):
 
 
 # 확장된 참조 표현 패턴 (30개+)
+# Phase 3: 암시적 필터 패턴 추가 (4단계+ 체이닝 지원)
 REFERENCE_PATTERNS = {
     ReferenceType.LATEST: [
         # 한글 - 표준 표현
@@ -70,6 +72,26 @@ REFERENCE_PATTERNS = {
         r'in\s*this\s*(result|data|list)', # "in this result"
         r'out\s*of\s*(this|these)',  # "out of these"
         r'(this|these)\s*중에?서?',  # "these 중에서"
+
+        # Phase 3: 암시적 필터 패턴 (문장 끝 "~만" 표현)
+        # 4단계+ 체이닝에서 "금액 10만원 이상만" 같은 표현 감지
+        r'.{2,}(것|건|거|데이터)만\s*$',  # "~것만", "~건만", "~거만" 으로 끝남
+        r'.{2,}(인|한|된|는)\s*것만\s*$', # "~인 것만", "~한 것만" 으로 끝남
+        r'(금액|amount).{0,15}(이상|이하|초과|미만).{0,5}만', # "금액 X 이상만"
+        r'(상태|status).{0,10}(인|가|만)',  # "상태가 X인 것만"
+        r'(결제|method).{0,10}(인|가|만)',  # "결제수단이 X인 것만"
+        r'(가맹점|merchant).{0,10}(만|것만)', # "가맹점 X만"
+
+        # Phase 3: 암시적 필터 - 비교/범위 표현
+        r'(만원|원)\s*(이상|이하|초과|미만)',  # "10만원 이상"
+        r'\d+\s*(이상|이하|초과|미만)\s*만?$', # "100 이상만"
+        r'(크|작|높|낮|많|적)(은|고)\s*(것|건|거)만',  # "큰 것만", "작은 건만"
+
+        # Phase 3: 필터 추가 표현
+        r'추가로\s*.{0,10}(필터|조건)',  # "추가로 필터"
+        r'(조건|필터)\s*추가',            # "조건 추가"
+        r'더\s*좁혀',                    # "더 좁혀서"
+        r'범위\s*좁혀',                  # "범위 좁혀서"
     ],
     ReferenceType.SPECIFIC: [
         # 특정 결과 지정 (숫자 앞에 맥락 필요)
@@ -106,6 +128,29 @@ NEW_QUERY_PATTERNS = [
     r'new\s*search',         # "new search"
 ]
 
+# 집계 키워드 패턴 (이전 결과 참조로 처리)
+# 이전 대화에서 조회한 결과에 대해 집계하는 것으로 간주
+AGGREGATION_KEYWORDS = [
+    # 한글 집계 표현
+    r'합산',                 # "합산해줘"
+    r'합계',                 # "합계 보여줘"
+    r'총\s*(금액|결제|매출|건수|수량)', # "총 금액", "총 결제", "총 매출"
+    r'전체\s*(금액|결제|매출)',  # "전체 금액" (단, "전체 조회"는 제외)
+    r'더해',                 # "더해줘"
+    r'sum',                  # "sum 구해줘"
+    r'평균',                 # "평균 구해줘"
+    r'평균\s*(금액|결제|매출)',  # "평균 금액"
+    r'avg',                  # "avg 구해줘"
+    r'개수',                 # "개수 세줘"
+    r'몇\s*건',              # "몇 건이야"
+    r'카운트',               # "카운트 해줘"
+    r'count',                # "count 해줘"
+    r'최대\s*(금액|값)',      # "최대 금액"
+    r'최소\s*(금액|값)',      # "최소 금액"
+    r'max',                  # "max 구해줘"
+    r'min',                  # "min 구해줘"
+]
+
 
 def detect_reference_expression(message: str) -> Tuple[bool, str]:
     """
@@ -119,7 +164,7 @@ def detect_reference_expression(message: str) -> Tuple[bool, str]:
     Returns:
         (is_refinement, ref_type) 튜플
         - is_refinement: True면 이전 조건 유지 필요
-        - ref_type: 'filter' (필터 추가), 'new' (새 쿼리), 'none' (해당없음)
+        - ref_type: 'filter' (필터 추가), 'aggregation' (집계 요청), 'new' (새 쿼리), 'none' (해당없음)
     """
     # 새 쿼리 패턴 먼저 체크 (우선순위 높음)
     for pattern in NEW_QUERY_PATTERNS:
@@ -131,6 +176,12 @@ def detect_reference_expression(message: str) -> Tuple[bool, str]:
         for pattern in patterns:
             if re.search(pattern, message, re.IGNORECASE):
                 return (True, 'filter')
+
+    # 집계 키워드 체크 (이전 결과에 대한 집계로 처리)
+    # 집계 요청은 이전 대화에서 조회한 결과에 대해 수행하는 것으로 간주
+    for pattern in AGGREGATION_KEYWORDS:
+        if re.search(pattern, message, re.IGNORECASE):
+            return (True, 'aggregation')
 
     return (False, 'none')
 
@@ -518,7 +569,7 @@ from app.services.rag_service import get_rag_service
 
 # Text-to-SQL 모드용 import (조건부)
 if ENABLE_TEXT_TO_SQL:
-    from app.services.text_to_sql import get_text_to_sql_service
+    from app.services.text_to_sql import get_text_to_sql_service, extract_where_conditions
 
 logger = logging.getLogger(__name__)
 logger.info(f"Text-to-SQL mode: {'ENABLED' if ENABLE_TEXT_TO_SQL else 'DISABLED'}")
@@ -1375,6 +1426,11 @@ async def handle_text_to_sql(
         if result["success"]:
             # 성공: 데이터를 RenderSpec으로 변환
             render_spec = compose_sql_render_spec(result, request.message)
+
+            # 집계 쿼리 메타데이터 추가
+            is_aggregation = result.get("isAggregation", False)
+            aggregation_context = result.get("aggregationContext")
+
             query_result = {
                 "requestId": request_id,
                 "status": "success",
@@ -1387,7 +1443,10 @@ async def handle_text_to_sql(
                     "rowsReturned": result["rowCount"],
                     "totalRows": result["rowCount"],
                     "dataSource": "text_to_sql"
-                }
+                },
+                # 집계 쿼리 정보 추가
+                "isAggregation": is_aggregation,
+                "aggregationContext": aggregation_context
             }
         else:
             # 실패: 에러 RenderSpec
@@ -1473,32 +1532,260 @@ async def handle_text_to_sql(
         )
 
 
-def build_sql_history(conversation_history: Optional[List[ChatMessageItem]]) -> List[Dict[str, str]]:
-    """대화 이력을 Text-to-SQL 형식으로 변환"""
+def build_sql_history(conversation_history: Optional[List[ChatMessageItem]]) -> List[Dict[str, Any]]:
+    """
+    대화 이력을 Text-to-SQL 형식으로 변환
+
+    대화 기반 맥락 처리를 위해 다음 정보를 포함:
+    - role: 메시지 역할 (user/assistant)
+    - content: 메시지 내용
+    - sql: 생성된 SQL (assistant 메시지)
+    - rowCount: 쿼리 결과 건수 (assistant 메시지)
+    - whereConditions: WHERE 조건 목록 (assistant 메시지) - Phase 1: 명시적 저장
+    """
     if not conversation_history:
         return []
 
     sql_history = []
     for msg in conversation_history[-10:]:  # 최근 10개만
-        entry = {
+        entry: Dict[str, Any] = {
             "role": msg.role,
             "content": msg.content
         }
+
         # assistant 메시지에 SQL 정보가 있으면 포함
         if msg.role == "assistant" and msg.queryPlan:
             if msg.queryPlan.get("mode") == "text_to_sql" and msg.queryPlan.get("sql"):
-                entry["sql"] = msg.queryPlan.get("sql")
+                sql = msg.queryPlan.get("sql")
+                entry["sql"] = sql
+
+                # Phase 1: WHERE 조건을 명시적으로 추출하여 저장
+                # 이를 통해 4단계+ 체이닝에서도 조건이 유실되지 않음
+                if ENABLE_TEXT_TO_SQL:
+                    where_conditions = extract_where_conditions(sql)
+                    if where_conditions:
+                        entry["whereConditions"] = where_conditions
+
+        # 결과 건수 추출 (queryResult의 metadata에서)
+        if msg.role == "assistant" and msg.queryResult:
+            metadata = msg.queryResult.get("metadata", {})
+            # totalRows 또는 rowsReturned 우선순위로 확인
+            row_count = (
+                msg.queryResult.get("totalCount") or
+                metadata.get("totalRows") or
+                metadata.get("rowsReturned")
+            )
+            if row_count is not None:
+                entry["rowCount"] = row_count
+
         sql_history.append(entry)
 
     return sql_history
 
 
+# ============================================
+# 차트 렌더링 감지 및 구성 (TC-001)
+# ============================================
+
+# 차트 관련 키워드
+CHART_KEYWORDS = ["그래프로", "차트로", "시각화로", "그래프 형태", "차트 형태", "그래프로 보여", "차트로 보여"]
+TABLE_KEYWORDS = ["표로", "테이블로", "목록으로", "리스트로"]
+
+# 시계열 필드 감지용 키워드
+TIME_FIELD_KEYWORDS = ["date", "time", "day", "month", "year", "week", "quarter", "period", "날짜", "일자", "월", "연도"]
+
+
+def _detect_render_type_from_message(message: str) -> Optional[str]:
+    """사용자 메시지에서 렌더링 타입 감지
+
+    Args:
+        message: 사용자 질문
+
+    Returns:
+        "chart" | "table" | None
+    """
+    msg = message.lower()
+
+    # 차트 키워드 감지
+    if any(kw in msg for kw in CHART_KEYWORDS):
+        return "chart"
+
+    # 테이블 키워드 감지
+    if any(kw in msg for kw in TABLE_KEYWORDS):
+        return "table"
+
+    return None
+
+
+def _detect_chart_type(data: List[Dict[str, Any]], columns: List[str]) -> str:
+    """데이터 구조를 분석하여 적절한 차트 타입 결정
+
+    Args:
+        data: 쿼리 결과 데이터
+        columns: 컬럼 목록
+
+    Returns:
+        "bar" | "line" | "pie"
+    """
+    if not data or not columns:
+        return "bar"
+
+    # 시계열 데이터 감지 (날짜/시간 필드가 있는 경우)
+    has_time_column = any(
+        any(kw in col.lower() for kw in TIME_FIELD_KEYWORDS)
+        for col in columns
+    )
+
+    if has_time_column and len(data) > 2:
+        return "line"
+
+    # 카테고리가 적고 (5개 이하) 단일 값 컬럼이면 pie 차트
+    if len(data) <= 5 and len(columns) == 2:
+        return "pie"
+
+    # 기본은 bar 차트
+    return "bar"
+
+
+def _identify_axis_keys(data: List[Dict[str, Any]], columns: List[str]) -> Tuple[str, str]:
+    """X축과 Y축에 사용할 키 식별
+
+    Args:
+        data: 쿼리 결과 데이터
+        columns: 컬럼 목록
+
+    Returns:
+        (x_key, y_key) 튜플
+    """
+    if not columns:
+        return ("", "")
+
+    if len(columns) == 1:
+        return (columns[0], columns[0])
+
+    # 숫자형 컬럼 찾기 (Y축 후보)
+    numeric_cols = []
+    category_cols = []
+
+    if data:
+        first_row = data[0]
+        for col in columns:
+            value = first_row.get(col)
+            if isinstance(value, (int, float)):
+                numeric_cols.append(col)
+            else:
+                category_cols.append(col)
+
+    # X축: 카테고리/시간 컬럼, Y축: 숫자 컬럼
+    x_key = category_cols[0] if category_cols else columns[0]
+    y_key = numeric_cols[0] if numeric_cols else columns[-1]
+
+    return (x_key, y_key)
+
+
+def _compose_chart_render_spec(result: Dict[str, Any], question: str) -> Dict[str, Any]:
+    """차트 타입의 RenderSpec 구성
+
+    Args:
+        result: SQL 실행 결과
+        question: 사용자 질문
+
+    Returns:
+        차트 타입 RenderSpec
+    """
+    data = result.get("data", [])
+    row_count = result.get("rowCount", 0)
+
+    if not data:
+        return {
+            "type": "text",
+            "title": "차트 생성 불가",
+            "text": {
+                "content": "조회 결과가 없어 차트를 생성할 수 없습니다.",
+                "format": "plain"
+            },
+            "metadata": {
+                "sql": result.get("sql"),
+                "executionTimeMs": result.get("executionTimeMs"),
+                "mode": "text_to_sql"
+            }
+        }
+
+    columns = list(data[0].keys())
+    chart_type = _detect_chart_type(data, columns)
+    x_key, y_key = _identify_axis_keys(data, columns)
+
+    # X축 라벨 생성
+    x_label = x_key.replace("_", " ").title()
+    y_label = y_key.replace("_", " ").title()
+
+    # 차트 타입별 제목
+    chart_type_names = {
+        "bar": "막대 그래프",
+        "line": "추이 그래프",
+        "pie": "파이 차트"
+    }
+    title = f"{chart_type_names.get(chart_type, '차트')} ({row_count}건)"
+
+    render_spec = {
+        "type": "chart",
+        "title": title,
+        "chart": {
+            "chartType": chart_type,
+            "dataRef": "data.rows",
+            "xAxis": {
+                "dataKey": x_key,
+                "label": x_label,
+                "type": "category" if chart_type != "line" else "time"
+            },
+            "yAxis": {
+                "dataKey": y_key,
+                "label": y_label,
+                "type": "number"
+            },
+            "series": [
+                {
+                    "dataKey": y_key,
+                    "name": y_label,
+                    "type": chart_type if chart_type in ["bar", "line"] else "bar"
+                }
+            ],
+            "legend": True,
+            "tooltip": True
+        },
+        "data": data,
+        "metadata": {
+            "sql": result.get("sql"),
+            "executionTimeMs": result.get("executionTimeMs"),
+            "mode": "text_to_sql",
+            "chartType": chart_type
+        }
+    }
+
+    # pie 차트의 경우 series 대신 별도 설정
+    if chart_type == "pie":
+        render_spec["chart"]["series"] = [
+            {
+                "dataKey": y_key,
+                "name": y_label
+            }
+        ]
+
+    return render_spec
+
+
 def compose_sql_render_spec(result: Dict[str, Any], question: str) -> Dict[str, Any]:
     """SQL 실행 결과를 RenderSpec으로 변환
 
+    - 차트 요청: 차트 RenderSpec 반환 (TC-001)
     - 1000건 초과: 다운로드 RenderSpec (테이블 표시 안함)
     - 1000건 이하: 미리보기 10건 + 전체보기 모달
     """
+    # TC-001: 차트 렌더링 타입 감지
+    render_type = _detect_render_type_from_message(question)
+    if render_type == "chart":
+        return _compose_chart_render_spec(result, question)
+
     data = result.get("data", [])
     row_count = result.get("rowCount", 0)
     total_count = result.get("totalCount") or row_count
@@ -1539,6 +1826,10 @@ def compose_sql_render_spec(result: Dict[str, Any], question: str) -> Dict[str, 
             }
         }
 
+    # 집계 컨텍스트 추출
+    is_aggregation = result.get("isAggregation", False)
+    aggregation_context = result.get("aggregationContext")
+
     # 단일 행 + 집계 결과처럼 보이면 텍스트로 표시
     if row_count == 1 and len(data[0]) <= 3:
         row = data[0]
@@ -1557,6 +1848,23 @@ def compose_sql_render_spec(result: Dict[str, Any], question: str) -> Dict[str, 
             else:
                 content_parts.append(f"**{key}**: {value}")
 
+        # 집계 컨텍스트가 있으면 기준 정보 추가
+        if aggregation_context:
+            content_parts.append("")  # 빈 줄
+            content_parts.append("---")
+            content_parts.append("**데이터 기준**:")
+            if aggregation_context.get("basedOnFilters"):
+                for filter_cond in aggregation_context["basedOnFilters"]:
+                    content_parts.append(f"- `{filter_cond}`")
+            else:
+                content_parts.append("- 전체 데이터")
+
+            if aggregation_context.get("sourceRowCount"):
+                content_parts.append(f"- 원본 데이터: {aggregation_context['sourceRowCount']:,}건")
+
+            query_type = aggregation_context.get("queryType", "NEW_QUERY")
+            content_parts.append(f"- 쿼리 유형: {'새 쿼리' if query_type == 'NEW_QUERY' else '이전 결과 세분화'}")
+
         return {
             "type": "text",
             "title": "집계 결과",
@@ -1567,7 +1875,9 @@ def compose_sql_render_spec(result: Dict[str, Any], question: str) -> Dict[str, 
             "metadata": {
                 "sql": result.get("sql"),
                 "executionTimeMs": result.get("executionTimeMs"),
-                "mode": "text_to_sql"
+                "mode": "text_to_sql",
+                "isAggregation": is_aggregation,
+                "aggregationContext": aggregation_context
             }
         }
 
@@ -1604,6 +1914,13 @@ def compose_sql_render_spec(result: Dict[str, Any], question: str) -> Dict[str, 
         return {
             "type": "table",
             "title": title,
+            # TC-004: 최상위 pagination 추가
+            "pagination": {
+                "totalRows": row_count,
+                "totalPages": math.ceil(row_count / PREVIEW_LIMIT) if row_count > 0 else 1,
+                "pageSize": PREVIEW_LIMIT,
+                "hasMore": has_more
+            },
             "table": {
                 "columns": column_defs,
                 "data": preview_data,  # 미리보기만 전송

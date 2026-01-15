@@ -174,19 +174,25 @@ public class QueryExecutorService {
         }
         response.put("metadata", metadata);
 
-        // Pagination (if applicable)
+        // Pagination (always included for list/search operations)
         int limit = getLimit(queryPlan);
-        if (rows.size() >= limit) {
-            // There might be more data - create pagination token
-            String queryToken = paginationService.createToken(queryPlan, rows, limit, totalRows);
+        if ("list".equals(operation) || "search".equals(operation)) {
+            boolean hasMore = rows.size() >= limit;
             int totalPages = totalRows > 0 ? (int) Math.ceil((double) totalRows / limit) : 1;
+
             Map<String, Object> pagination = new HashMap<>();
-            pagination.put("queryToken", queryToken);
-            pagination.put("hasMore", true);
+            pagination.put("hasMore", hasMore);
             pagination.put("currentPage", 1);
             pagination.put("totalPages", totalPages);
             pagination.put("totalRows", totalRows);
             pagination.put("pageSize", limit);
+
+            // hasMore인 경우에만 queryToken 생성
+            if (hasMore) {
+                String queryToken = paginationService.createToken(queryPlan, rows, limit, totalRows);
+                pagination.put("queryToken", queryToken);
+            }
+
             response.put("pagination", pagination);
         }
 
