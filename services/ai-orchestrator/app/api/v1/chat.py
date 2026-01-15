@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List, Generator, Tuple
+from enum import Enum
 import httpx
 import logging
 import os
@@ -23,6 +24,88 @@ from datetime import datetime
 # ============================================
 # 참조 표현 감지 (연속 대화 WHERE 조건 병합용)
 # ============================================
+
+class ReferenceType(str, Enum):
+    """참조 표현 유형"""
+    LATEST = "latest"      # 직전 결과 참조 ("이중에", "방금")
+    SPECIFIC = "specific"  # 특정 결과 참조 ("30건에서", "첫 번째 결과")
+    PARTIAL = "partial"    # 부분 결과 참조 ("상위 10개", "처음 5건")
+    NONE = "none"          # 참조 표현 없음
+
+
+# 확장된 참조 표현 패턴 (30개+)
+REFERENCE_PATTERNS = {
+    ReferenceType.LATEST: [
+        # 한글 - 표준 표현
+        r'이\s*중에?서?',        # "이중에", "이 중에서", "이중에서"
+        r'여기서',               # "여기서"
+        r'그\s*중에?서?',        # "그중에", "그 중에서"
+        r'직전\s*(결과|데이터)?', # "직전", "직전 결과"
+        r'방금\s*(결과|데이터)?', # "방금", "방금 결과"
+        r'위\s*결과',            # "위 결과", "위결과"
+        r'앞\s*(서|에서)',        # "앞서", "앞에서"
+        r'해당\s*데이터',         # "해당 데이터"
+        r'이\s*결과에?서?',       # "이 결과", "이 결과에서"
+        r'저\s*중에?서?',         # "저중에", "저 중에서"
+        r'거기서',               # "거기서"
+        # 한글 - 구어체/줄임말
+        r'아까\s*(그\s*)?(거|것|데이터)?', # "아까 그거", "아까 거"
+        r'그거에?서?',           # "그거에서", "그거서"
+        r'이거에?서?',           # "이거에서", "이거서"
+        r'조회\s*한\s*거에?서?',  # "조회한 거에서"
+        r'나온\s*(거|것)에?서?',  # "나온 거에서"
+        r'보여준\s*(거|것)에?서?', # "보여준 거에서"
+        r'받은\s*(거|것|데이터)에?서?', # "받은 거에서"
+        r'화면\s*(에\s*)?(있는|보이는)', # "화면에 있는"
+        r'지금\s*(보이는|있는)',  # "지금 보이는"
+        # 한글 - 상황별 표현
+        r'조회된\s*결과',         # "조회된 결과"
+        r'이전\s*결과에?서?',     # "이전 결과에서"
+        r'검색\s*결과에?서?',     # "검색 결과에서"
+        r'목록에?서?',           # "목록에서"
+        r'테이블에?서?',         # "테이블에서"
+        # 영어/영한 혼용
+        r'from\s*(this|these|here)', # "from this", "from these"
+        r'among\s*(this|these)',     # "among these"
+        r'in\s*this\s*(result|data|list)', # "in this result"
+        r'out\s*of\s*(this|these)',  # "out of these"
+        r'(this|these)\s*중에?서?',  # "these 중에서"
+    ],
+    ReferenceType.SPECIFIC: [
+        # 특정 결과 지정 (숫자 앞에 맥락 필요)
+        r'아까\s*\d+건',         # "아까 30건"
+        r'(그|저)\s*\d+건에?서?', # "그 30건에서"
+        r'(첫|두|세)\s*번째\s*(결과|데이터)', # "첫 번째 결과"
+        r'(처음|마지막)\s*(결과|데이터)', # "처음 결과", "마지막 결과"
+        r'(이전|앞의?)\s*조회',   # "이전 조회"
+        r'결과\s*\d+건에?서?',   # "결과 30건에서"
+    ],
+    ReferenceType.PARTIAL: [
+        # 부분 결과 참조
+        r'상위\s*\d+',           # "상위 10개"
+        r'하위\s*\d+',           # "하위 5개"
+        r'처음\s*\d+건?',        # "처음 5건"
+        r'위\s*\d+건?',          # "위 10건"
+        r'top\s*\d+',            # "top 10"
+        r'first\s*\d+',          # "first 5"
+    ]
+}
+
+# 새 쿼리 패턴 (이전 조건 무시)
+NEW_QUERY_PATTERNS = [
+    r'새로\s*.{0,10}조회',   # "새로 조회", "새로 환불 내역 조회"
+    r'다시\s*.{0,10}조회',   # "다시 조회", "다시 결제 조회"
+    r'처음부터',             # "처음부터"
+    r'새\s*쿼리',            # "새 쿼리"
+    r'전체\s*다시',          # "전체 다시"
+    r'전체\s*조회',          # "전체 조회"
+    r'새로\s*검색',          # "새로 검색"
+    r'다른\s*(데이터|것|거)', # "다른 데이터"
+    r'별도로',               # "별도로"
+    r'fresh\s*query',        # "fresh query"
+    r'new\s*search',         # "new search"
+]
+
 
 def detect_reference_expression(message: str) -> Tuple[bool, str]:
     """
@@ -38,41 +121,38 @@ def detect_reference_expression(message: str) -> Tuple[bool, str]:
         - is_refinement: True면 이전 조건 유지 필요
         - ref_type: 'filter' (필터 추가), 'new' (새 쿼리), 'none' (해당없음)
     """
-    # 필터/세분화 패턴 (이전 결과 참조)
-    FILTER_PATTERNS = [
-        r'이\s*중에?',           # "이중에", "이 중에"
-        r'여기서',               # "여기서"
-        r'그\s*중',              # "그중", "그 중"
-        r'직전',                 # "직전"
-        r'방금',                 # "방금"
-        r'위\s*결과',            # "위 결과", "위결과"
-        r'앞\s*(서|에서)',        # "앞서", "앞에서"
-        r'해당\s*데이터',         # "해당 데이터"
-        r'이\s*결과',            # "이 결과"
-        r'저\s*중에?',           # "저중에", "저 중에"
-        r'거기서',               # "거기서"
-    ]
-
-    # 새 쿼리 패턴 (이전 조건 무시)
-    NEW_QUERY_PATTERNS = [
-        r'새로\s*.{0,10}조회',   # "새로 조회", "새로 환불 내역 조회"
-        r'다시\s*.{0,10}조회',   # "다시 조회", "다시 결제 조회"
-        r'처음부터',             # "처음부터"
-        r'새\s*쿼리',            # "새 쿼리"
-        r'전체\s*다시',          # "전체 다시"
-    ]
-
     # 새 쿼리 패턴 먼저 체크 (우선순위 높음)
     for pattern in NEW_QUERY_PATTERNS:
         if re.search(pattern, message, re.IGNORECASE):
             return (False, 'new')
 
-    # 필터 패턴 체크
-    for pattern in FILTER_PATTERNS:
-        if re.search(pattern, message, re.IGNORECASE):
-            return (True, 'filter')
+    # 참조 패턴 체크 (유형별)
+    for ref_type, patterns in REFERENCE_PATTERNS.items():
+        for pattern in patterns:
+            if re.search(pattern, message, re.IGNORECASE):
+                return (True, 'filter')
 
     return (False, 'none')
+
+
+def detect_reference_type(message: str) -> ReferenceType:
+    """
+    참조 표현의 세부 유형 감지
+
+    Args:
+        message: 사용자 메시지
+
+    Returns:
+        ReferenceType: 참조 유형 (LATEST, SPECIFIC, PARTIAL, NONE)
+    """
+    # 우선순위: SPECIFIC > PARTIAL > LATEST
+    for ref_type in [ReferenceType.SPECIFIC, ReferenceType.PARTIAL, ReferenceType.LATEST]:
+        if ref_type in REFERENCE_PATTERNS:
+            for pattern in REFERENCE_PATTERNS[ref_type]:
+                if re.search(pattern, message, re.IGNORECASE):
+                    return ref_type
+
+    return ReferenceType.NONE
 
 # Text-to-SQL 모드 플래그
 ENABLE_TEXT_TO_SQL = os.getenv("SQL_ENABLE_TEXT_TO_SQL", "false").lower() == "true"
@@ -112,82 +192,163 @@ def summarize_query_plan(query_plan: Dict[str, Any]) -> str:
 
 
 def build_conversation_context(history: List["ChatMessageItem"]) -> str:
-    """이전 대화를 프롬프트용 텍스트로 변환 (다중 결과 상황 명시 포함)"""
+    """이전 대화를 프롬프트용 텍스트로 변환 (구조화된 결과 현황 포함)"""
     if not history:
         return ""
 
     context = "## 이전 대화 컨텍스트\n\n"
 
     # ============================================
-    # [NEW] 다중 결과 상황 명시 섹션
+    # 조회 결과 현황 (구조화된 테이블 형식)
     # ============================================
     result_messages = []
     for i, msg in enumerate(history):
         if msg.role == "assistant" and msg.queryResult:
             entity = msg.queryPlan.get("entity", "unknown") if msg.queryPlan else "unknown"
             count = msg.queryResult.get("totalCount", 0)
-            # 필터 정보도 추가 (같은 entity라도 조건이 다를 수 있음)
+
+            # 필터 정보 추출
             filters = msg.queryPlan.get("filters", []) if msg.queryPlan else []
-            filter_desc = ""
+            filter_desc = "-"
             if filters:
                 filter_strs = [f"{f.get('field')}={f.get('value')}" for f in filters[:2]]
-                filter_desc = f" ({', '.join(filter_strs)})"
+                filter_desc = ", ".join(filter_strs)
+
+            # 금액 정보 추출
+            total_amount = None
+            data_obj = msg.queryResult.get("data", {})
+            rows = data_obj.get("rows", []) if isinstance(data_obj, dict) else []
+            if rows:
+                amounts = []
+                for row in rows:
+                    if isinstance(row, dict):
+                        for field in ["amount", "totalAmount", "total_amount", "price"]:
+                            if field in row and row[field] is not None:
+                                try:
+                                    amounts.append(float(row[field]))
+                                except (ValueError, TypeError):
+                                    pass
+                                break
+                if amounts:
+                    total_amount = sum(amounts)
+
+            # 결과 타입 판단 (테이블 vs 집계)
+            result_type = "table"  # 기본값
+            if msg.renderSpec and msg.renderSpec.get("type") == "text":
+                result_type = "aggregation"
+
+            # 관계 정보 추정
+            relation = "최초 조회"
+            if len(result_messages) > 0:
+                prev = result_messages[-1]
+                if prev["entity"] == entity and filters:
+                    relation = f"#{prev['index']}에서 필터링"
+                elif prev["entity"] != entity:
+                    relation = "새로운 엔티티"
+                else:
+                    relation = "조건 변경"
+
             result_messages.append({
                 "index": i,
                 "entity": entity,
                 "count": count,
                 "filter_desc": filter_desc,
+                "total_amount": total_amount,
+                "result_type": result_type,
+                "relation": relation,
                 "is_latest": False
             })
 
     if result_messages:
         result_messages[-1]["is_latest"] = True  # 마지막이 직전 결과
 
-        context += "### 📊 현재 세션의 조회 결과 현황\n"
-        for r in result_messages:
-            marker = "👉 (직전)" if r["is_latest"] else ""
-            context += f"- 결과 #{r['index']}: {r['entity']} {r['count']}건{r['filter_desc']} {marker}\n"
+        # 구조화된 테이블 형식
+        context += "### 📊 조회 결과 현황\n"
+        context += "| # | 엔티티 | 건수 | 조건 | 금액 | 타입 | 관계 |\n"
+        context += "|---|--------|------|------|------|------|------|\n"
 
-        if len(result_messages) > 1:
-            # 다중 결과 경고 - LLM이 주목하도록
-            entities = set(r["entity"] for r in result_messages)
-            if len(entities) > 1:
-                context += f"\n⚠️ **다른 종류의 결과가 {len(result_messages)}개 있습니다** ({', '.join(entities)})\n"
-                context += "→ 사용자가 특정 결과를 지정하지 않으면 needs_result_clarification=true 권장\n"
-            else:
-                context += f"\n📌 동일 엔티티({list(entities)[0]}) 결과가 {len(result_messages)}개 있습니다 (조건이 다름).\n"
-                context += "→ 참조 표현 없이 집계/필터 요청 시 needs_result_clarification=true 고려\n"
+        for r in result_messages:
+            marker = "👉" if r["is_latest"] else ""
+            amount_str = f"${r['total_amount']:,.0f}" if r['total_amount'] else "-"
+            context += f"| {marker}{r['index']} | {r['entity']} | {r['count']} | {r['filter_desc']} | {amount_str} | {r['result_type']} | {r['relation']} |\n"
+
         context += "\n"
 
+        # ============================================
+        # 결과 관계 분석 (LLM이 이해하기 쉽게)
+        # ============================================
+        context += "### 결과 관계 분석\n"
+        entities = {}
+        for r in result_messages:
+            if r["entity"] not in entities:
+                entities[r["entity"]] = []
+            entities[r["entity"]].append(r)
+
+        for entity, results in entities.items():
+            if len(results) > 1:
+                context += f"- **{entity}**: {len(results)}개 결과 (조건이 다름)\n"
+                for r in results[1:]:
+                    context += f"  - 결과 #{r['index']}은 #{result_messages[0]['index']}에서 파생됨\n"
+            else:
+                context += f"- **{entity}**: 1개 결과\n"
+
+        context += "\n"
+
+        # ============================================
+        # 계산에 사용할 데이터 (명시적)
+        # ============================================
+        latest = result_messages[-1]
+        context += "### 📌 현재 작업 대상 (직전 결과)\n"
+        context += f"- **엔티티**: {latest['entity']}\n"
+        context += f"- **건수**: {latest['count']}건\n"
+        context += f"- **타입**: {latest['result_type']} ({'목록 데이터' if latest['result_type'] == 'table' else '집계 결과'})\n"
+        if latest['total_amount']:
+            context += f"- **금액 합계**: ${latest['total_amount']:,.0f}\n"
+        if latest['filter_desc'] != "-":
+            context += f"- **적용된 필터**: {latest['filter_desc']}\n"
+
+        context += "\n"
+
+        # 다중 결과 경고
+        if len(result_messages) > 1:
+            entity_set = set(r["entity"] for r in result_messages)
+            if len(entity_set) > 1:
+                context += f"⚠️ **주의**: 다른 종류의 결과가 {len(result_messages)}개 있습니다 ({', '.join(entity_set)})\n"
+                context += "→ 참조 표현 없으면 어떤 결과를 대상으로 하는지 불명확할 수 있음\n\n"
+
     # ============================================
-    # 대화 히스토리 (기존 유지)
+    # 대화 히스토리 (최근 5개)
     # ============================================
     context += "### 대화 히스토리\n"
     for msg in history[-5:]:
         if msg.role == 'user':
-            context += f"사용자: {msg.content}\n"
+            context += f"**사용자**: {msg.content}\n"
         else:
             # queryPlan 요약 포함
             if msg.queryPlan:
                 plan_summary = summarize_query_plan(msg.queryPlan)
-                context += f"어시스턴트: [쿼리: {plan_summary}]\n"
+                context += f"**어시스턴트**: [쿼리: {plan_summary}]\n"
             else:
-                context += f"어시스턴트: [결과 표시됨]\n"
+                context += f"**어시스턴트**: [결과 표시됨]\n"
 
             # 집계 결과값 포함 (중요: 후속 계산용)
             if msg.renderSpec and msg.renderSpec.get("type") == "text":
                 text_content = msg.renderSpec.get("text", {}).get("content", "")
                 if text_content and ("합계" in text_content or "$" in text_content or "원" in text_content):
-                    context += f"  → 집계 결과: {text_content}\n"
+                    context += f"  → **집계 결과**: {text_content}\n"
 
     # ============================================
-    # 후속 질문 처리 규칙 (개선)
+    # 후속 질문 처리 규칙 (강화)
     # ============================================
     context += "\n### 후속 질문 처리 규칙\n"
-    context += "1. '이중에', '여기서', '직전', '방금' 등 참조 표현 → **직전 결과 사용**, needs_result_clarification=false\n"
-    context += "2. 참조 표현 없이 집계/필터 요청 + 다중 결과 → needs_result_clarification=true 고려\n"
-    context += "3. 후속 질문에서는 **이전 엔티티 유지** (다른 엔티티로 변경 금지)\n"
-    context += "4. 이전 집계 결과에 대한 산술 연산 → query_intent=direct_answer\n"
+    context += "1. **참조 표현 있음** ('이중에', '여기서', '직전', '방금', '아까 그거') → 직전 결과 사용\n"
+    context += "2. **참조 표현 없음** + 다중 결과 → 문맥상 명확하지 않으면 clarification 고려\n"
+    context += "3. **직전 결과 타입 확인**:\n"
+    context += "   - 테이블(목록) + '합산' → aggregate_local\n"
+    context += "   - 집계결과 + '수수료 적용' → direct_answer\n"
+    context += "   - 집계결과 + '필터링' → query_needed (집계 결과는 필터 불가)\n"
+    context += "4. **엔티티 유지**: 후속 질문에서 다른 엔티티로 변경하려면 명시적 표현 필요\n"
+
     return context
 
 

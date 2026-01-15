@@ -527,6 +527,43 @@ class QueryPlannerService:
 2. "합산", "합계", "평균", "건수" 등 기본 집계 요청
 3. 아직 집계가 수행되지 않은 상태
 
+## 경계 사례 처리 규칙 (Edge Cases) - 매우 중요!
+
+### CASE 1: "합산해줘" 판단 기준
+| 이전 결과 상태 | 분류 | 이유 |
+|---------------|------|------|
+| 테이블/목록 결과 있음 | aggregate_local | 목록 데이터를 집계해야 함 |
+| 집계 결과(텍스트) 있음 | direct_answer | 이미 합계가 있으므로 추가 계산만 |
+| 결과 없음 | query_needed | 집계할 데이터 없음, 새 쿼리 필요 |
+
+### CASE 2: "DONE 상태만" 판단 기준
+| 사용자 표현 | 분류 | 이유 |
+|------------|------|------|
+| "이중에 DONE만" | filter_local | "이중에" 참조 표현 있음 |
+| "여기서 DONE만" | filter_local | "여기서" 참조 표현 있음 |
+| "DONE 상태만 조회" | query_needed | 참조 표현 없음 = 새 쿼리 |
+| "DONE만 보여줘" (직후) | filter_local | 직전 결과 바로 다음이면 암시적 참조 |
+
+### CASE 3: 암시적 참조 판단
+| 상황 | 분류 | 이유 |
+|------|------|------|
+| 직전 테이블 결과 + "카드만" | filter_local | 맥락상 직전 결과 참조 |
+| 아무 맥락 없이 "카드만" | query_needed | 참조 대상 불명 |
+| 집계 결과 후 + "카드만" | query_needed | 집계 결과는 필터 불가 |
+
+### CASE 4: 참조 표현 우선순위
+다음 키워드가 있으면 **무조건** 해당 intent:
+- "새로", "다시 조회", "처음부터", "전체에서" → **query_needed**
+- "이중에", "여기서", "아까", "방금", "그중에" → **filter_local** 또는 **aggregate_local**
+
+### CASE 5: 후속 요청 판단
+| 직전 요청 | 현재 요청 | 분류 | 이유 |
+|----------|----------|------|------|
+| 목록 조회 | "합산해줘" | aggregate_local | 조회된 목록 집계 |
+| 집계 완료 | "수수료 적용해줘" | direct_answer | 집계 결과에 계산 |
+| 필터링 완료 | "총액" | aggregate_local | 필터된 결과 집계 |
+| 집계 완료 | "도서만" | query_needed | 집계 결과 필터 불가 |
+
 ## ⚠️ 매우 중요: direct_answer_text 생성 규칙
 intent가 "direct_answer"이면 **반드시** direct_answer_text에 계산된 답변을 작성하세요!
 
@@ -542,6 +579,54 @@ intent가 "direct_answer"이면 **반드시** direct_answer_text에 계산된 �
   "$5,035,000을 5로 나누면 **$1,007,000**입니다."
 
 **절대 direct_answer_text를 null로 두지 마세요! 반드시 계산 결과를 포함하세요.**
+
+## 🎯 Few-shot 예시 (반드시 참고!)
+
+### filter_local 예시 (8개)
+| 이전 컨텍스트 | 사용자 입력 | intent | reasoning |
+|--------------|------------|--------|-----------|
+| Payment 30건 조회됨 | "이중에 도서만" | filter_local | "이중에" 참조 표현 + 필터 조건 |
+| Payment 30건 조회됨 | "여기서 DONE만 보여줘" | filter_local | "여기서" 참조 + status 필터 |
+| 결제 목록 있음 | "아까 그거에서 카드만" | filter_local | "아까 그거에서" 구어체 참조 |
+| Payment 100건 있음 | "방금 결과에서 mer_001만" | filter_local | "방금 결과에서" 참조 |
+| 테이블 표시 중 | "이전 결과에서 100만원 이상만" | filter_local | "이전 결과에서" 참조 + 금액 필터 |
+| Payment 데이터 있음 | "그중에 간편결제만" | filter_local | "그중에" 참조 |
+| 조회 결과 있음 | "조회된 결과에서 실패건만" | filter_local | "조회된 결과에서" 참조 |
+| Payment 있음 | "화면에 있는 것 중에 취소만" | filter_local | "화면에 있는 것 중에" 참조 |
+
+### aggregate_local 예시 (6개)
+| 이전 컨텍스트 | 사용자 입력 | intent | reasoning |
+|--------------|------------|--------|-----------|
+| Payment 30건 (테이블) | "금액 합산해줘" | aggregate_local | 테이블 결과 + 집계 요청 |
+| 필터링된 7건 | "총액 얼마야?" | aggregate_local | 목록 결과 + 총액 요청 |
+| Payment 목록 있음 | "평균 결제 금액" | aggregate_local | 목록 + 평균 집계 |
+| 결과 데이터 있음 | "몇 건이야?" | aggregate_local | 건수 집계 |
+| Payment 데이터 있음 | "합계 계산해줘" | aggregate_local | 합계 집계 요청 |
+| 조회 완료 후 | "이중에서 총합" | aggregate_local | 참조 + 총합 집계 |
+
+### direct_answer 예시 (4개)
+| 이전 컨텍스트 | 사용자 입력 | intent | reasoning |
+|--------------|------------|--------|-----------|
+| 집계 결과 $5,000,000 | "수수료 0.6% 적용해줘" | direct_answer | 집계 결과에 백분율 계산 |
+| 합계 $1,949,000 | "5로 나누면?" | direct_answer | 집계 결과에 산술 연산 |
+| 총액 $3,000,000 | "VAT 10% 포함하면?" | direct_answer | 집계 결과에 세금 계산 |
+| 평균 $150,000 | "이게 무슨 의미야?" | direct_answer | 설명 요청 |
+
+### query_needed 예시 (4개)
+| 이전 컨텍스트 | 사용자 입력 | intent | reasoning |
+|--------------|------------|--------|-----------|
+| Payment 조회 후 | "환불 내역도 조회해줘" | query_needed | 다른 엔티티(Refund) 조회 |
+| 어떤 결과든 | "새로 조회해줘" | query_needed | "새로" 키워드 = 새 쿼리 |
+| 결과 있음 | "처음부터 100만원 이상만" | query_needed | "처음부터" = DB 재조회 |
+| 없음 | "정산 현황 알려줘" | query_needed | 새로운 조회 요청 |
+
+### Negative 예시 (잘못된 분류 방지)
+| 상황 | 잘못된 분류 | 올바른 분류 | 이유 |
+|------|-----------|------------|------|
+| 테이블 결과 있음 + "합산해줘" | direct_answer ❌ | aggregate_local ✓ | 집계 결과가 아닌 테이블이므로 먼저 집계 필요 |
+| 아무 결과 없음 + "이중에 DONE만" | filter_local ❌ | query_needed ✓ | 참조할 결과가 없음 |
+| 집계 결과 $5M + "도서만" | filter_local ❌ | query_needed ✓ | 집계 결과는 필터링 불가, 새 쿼리 필요 |
+| "DONE 상태만 조회" (참조 없음) | filter_local ❌ | query_needed ✓ | 참조 표현 없음 = 새 쿼리 |
 
 응답은 반드시 JSON 형식으로:
 {{
