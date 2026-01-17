@@ -1774,6 +1774,163 @@ def _compose_chart_render_spec(result: Dict[str, Any], question: str) -> Dict[st
     return render_spec
 
 
+def _escape_markdown_table_cell(value: str) -> str:
+    """Markdown 테이블 셀의 특수문자 escape 처리
+
+    테이블이 깨지지 않도록 파이프(|), 백틱(`) 등 처리
+    """
+    if value is None:
+        return "-"
+    s = str(value)
+    # 파이프 문자는 테이블 구분자와 충돌하므로 escape
+    s = s.replace("|", "\\|")
+    # 줄바꿈은 공백으로 대체
+    s = s.replace("\n", " ").replace("\r", "")
+    return s
+
+
+def _format_aggregation_as_markdown_table(
+    row: Dict[str, Any],
+    aggregation_context: Optional[Dict[str, Any]] = None
+) -> str:
+    """집계 결과를 Markdown 테이블로 변환
+
+    Args:
+        row: 집계 결과 단일 행 (예: {"total_amount": 14477000, "fee": 86862})
+        aggregation_context: 집계 컨텍스트 (humanizedFilters 포함)
+
+    Returns:
+        Markdown 형식 문자열
+    """
+    # 컬럼명 → 한글 라벨 매핑
+    COLUMN_LABELS = {
+        # SQL 집계 함수 결과명 (PostgreSQL 기본 반환명)
+        "sum": "합계",
+        "count": "건수",
+        "avg": "평균",
+        "max": "최대값",
+        "min": "최소값",
+        # 별칭을 가진 집계 결과
+        "original_amount": "원금액",
+        "fee": "수수료",
+        "amount_excluding_fee": "수수료 제외 금액",
+        "total_amount": "총 금액",
+        "total_fee": "총 수수료",
+        "avg_amount": "평균 금액",
+        "average_amount": "평균 금액",
+        "max_amount": "최대 금액",
+        "min_amount": "최소 금액",
+        "sum_amount": "합계 금액",
+        "payment_count": "결제 건수",
+        "refund_count": "환불 건수",
+        "net_amount": "정산 금액",
+        "total_payment_amount": "총 결제 금액",
+        "total_refund_amount": "총 환불 금액",
+        # LLM이 자주 생성하는 별칭
+        "completed_payment_count": "완료 결제 건수",
+        "total_payments": "총 결제 건수",
+        "avg_payment": "평균 결제 금액",
+        "canceled_count": "취소 건수",
+        "failed_count": "실패 건수",
+        "total_sales": "총 매출",
+        "total_transactions": "총 거래 건수",
+        # 일반 컬럼명
+        "amount": "금액",
+        "merchant_id": "가맹점 ID",
+        "status": "상태",
+        "method": "결제수단",
+    }
+
+    # 금액 관련 키워드 (통화 포맷팅 적용)
+    AMOUNT_KEYWORDS = ["amount", "fee", "total", "sum", "price", "balance", "net"]
+
+    def format_value(key: str, value) -> str:
+        """값을 포맷팅 (금액은 통화 형식, 건수는 "건" 접미사)"""
+        from decimal import Decimal
+
+        if value is None:
+            return "-"
+
+        # 숫자 타입 체크 (int, float, Decimal, 숫자 문자열)
+        numeric_value = None
+        if isinstance(value, (int, float, Decimal)):
+            numeric_value = float(value)
+        elif isinstance(value, str):
+            try:
+                numeric_value = float(value)
+            except ValueError:
+                pass
+
+        if numeric_value is not None:
+            int_val = int(numeric_value)
+            # 금액 관련 필드면 통화 포맷
+            if any(kw in key.lower() for kw in AMOUNT_KEYWORDS):
+                return f"₩{int_val:,}"
+            # count 필드면 "건" 접미사
+            elif "count" in key.lower():
+                return f"{int_val:,}건"
+            else:
+                return f"{int_val:,}"
+
+        return _escape_markdown_table_cell(value)
+
+    def get_label(key: str) -> str:
+        """컬럼명을 한글 라벨로 변환"""
+        if key in COLUMN_LABELS:
+            return COLUMN_LABELS[key]
+        # 스네이크 케이스를 공백으로 변환하고 Title Case 적용
+        return key.replace("_", " ").title()
+
+    # Markdown 테이블 생성
+    lines = [
+        "## 📊 집계 결과\n",
+        "| 항목 | 값 |",
+        "|------|------|"
+    ]
+
+    for key, value in row.items():
+        label = get_label(key)
+        formatted = format_value(key, value)
+        # escape 처리된 라벨과 값 사용
+        safe_label = _escape_markdown_table_cell(label)
+        lines.append(f"| {safe_label} | {formatted} |")
+
+    # 구분선
+    lines.append("\n---\n")
+
+    # 조회 조건 (humanized 사용)
+    if aggregation_context:
+        humanized_filters = aggregation_context.get("humanizedFilters", [])
+        based_on_filters = aggregation_context.get("basedOnFilters", [])
+
+        # humanizedFilters 우선, 없으면 basedOnFilters 사용
+        filters_to_show = humanized_filters if humanized_filters else based_on_filters
+
+        if filters_to_show:
+            lines.append("**📌 조회 조건**")
+            for filter_desc in filters_to_show:
+                safe_filter = _escape_markdown_table_cell(filter_desc)
+                lines.append(f"- {safe_filter}")
+            lines.append("")
+
+        # 기타 정보
+        info_items = []
+        source_count = aggregation_context.get("sourceRowCount")
+        if source_count is not None:
+            info_items.append(f"- 대상 데이터: {source_count:,}건")
+
+        query_type = aggregation_context.get("queryType")
+        if query_type:
+            qtype_label = "새 쿼리 실행" if query_type == "NEW_QUERY" else "조건 추가"
+            info_items.append(f"- 처리 방식: {qtype_label}")
+
+        if info_items:
+            lines.append("**📌 기타 정보**")
+            lines.extend(info_items)
+
+    return "\n".join(lines)
+
+
 def compose_sql_render_spec(result: Dict[str, Any], question: str) -> Dict[str, Any]:
     """SQL 실행 결과를 RenderSpec으로 변환
 
@@ -1830,46 +1987,17 @@ def compose_sql_render_spec(result: Dict[str, Any], question: str) -> Dict[str, 
     is_aggregation = result.get("isAggregation", False)
     aggregation_context = result.get("aggregationContext")
 
-    # 단일 행 + 집계 결과처럼 보이면 텍스트로 표시
-    if row_count == 1 and len(data[0]) <= 3:
+    # 단일 행 + 집계 결과처럼 보이면 Markdown 테이블로 표시
+    if row_count == 1 and len(data[0]) <= 5:
         row = data[0]
-        # 키-값 쌍으로 표시
-        content_parts = []
-        for key, value in row.items():
-            # 금액 포맷팅
-            if isinstance(value, (int, float)) and any(kw in key.lower() for kw in ["amount", "sum", "total", "count", "avg"]):
-                if value >= 1000000:
-                    formatted = f"₩{value:,.0f} ({value/1000000:.2f}M)"
-                elif value >= 1000:
-                    formatted = f"₩{value:,.0f}"
-                else:
-                    formatted = f"{value:,.2f}" if isinstance(value, float) else f"{value:,}"
-                content_parts.append(f"**{key}**: {formatted}")
-            else:
-                content_parts.append(f"**{key}**: {value}")
-
-        # 집계 컨텍스트가 있으면 기준 정보 추가
-        if aggregation_context:
-            content_parts.append("")  # 빈 줄
-            content_parts.append("---")
-            content_parts.append("**데이터 기준**:")
-            if aggregation_context.get("basedOnFilters"):
-                for filter_cond in aggregation_context["basedOnFilters"]:
-                    content_parts.append(f"- `{filter_cond}`")
-            else:
-                content_parts.append("- 전체 데이터")
-
-            if aggregation_context.get("sourceRowCount"):
-                content_parts.append(f"- 원본 데이터: {aggregation_context['sourceRowCount']:,}건")
-
-            query_type = aggregation_context.get("queryType", "NEW_QUERY")
-            content_parts.append(f"- 쿼리 유형: {'새 쿼리' if query_type == 'NEW_QUERY' else '이전 결과 세분화'}")
+        # Markdown 테이블 + 조회 조건 생성
+        content = _format_aggregation_as_markdown_table(row, aggregation_context)
 
         return {
             "type": "text",
             "title": "집계 결과",
             "text": {
-                "content": "\n".join(content_parts),
+                "content": content,
                 "format": "markdown"
             },
             "metadata": {

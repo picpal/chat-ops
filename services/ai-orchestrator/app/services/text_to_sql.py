@@ -45,7 +45,8 @@ class AggregationInfo:
 class AggregationContext:
     """집계 쿼리 컨텍스트 메타데이터"""
     query_type: str                     # "NEW_QUERY" 또는 "REFINEMENT"
-    based_on_filters: List[str]         # 적용된 WHERE 조건들
+    based_on_filters: List[str]         # 적용된 WHERE 조건들 (원본 SQL)
+    humanized_filters: List[str]        # 사용자 친화적 표현 (한글)
     source_row_count: Optional[int]     # 이전 쿼리 결과 건수 (있으면)
     aggregations: List[AggregationInfo] # 감지된 집계 함수들
     has_group_by: bool                  # GROUP BY 포함 여부
@@ -156,12 +157,16 @@ def build_aggregation_context(
     # WHERE 조건 추출
     where_conditions = extract_where_conditions(sql)
 
+    # 사용자 친화적 표현 생성
+    humanized_conditions = [humanize_where_condition(cond) for cond in where_conditions]
+
     # GROUP BY 감지
     has_group_by, group_by_columns = detect_group_by(sql)
 
     return AggregationContext(
         query_type="REFINEMENT" if is_refinement else "NEW_QUERY",
         based_on_filters=where_conditions,
+        humanized_filters=humanized_conditions,
         source_row_count=previous_row_count,
         aggregations=aggregations,
         has_group_by=has_group_by,
@@ -174,6 +179,7 @@ def aggregation_context_to_dict(ctx: AggregationContext) -> Dict[str, Any]:
     return {
         "queryType": ctx.query_type,
         "basedOnFilters": ctx.based_on_filters,
+        "humanizedFilters": ctx.humanized_filters,
         "sourceRowCount": ctx.source_row_count,
         "aggregations": [
             {
@@ -262,6 +268,151 @@ def extract_condition_field(condition: str) -> Optional[str]:
             return match.group(1).lower()
 
     return None
+
+
+def humanize_where_condition(condition: str) -> str:
+    """
+    SQL WHERE 조건을 사용자 친화적 표현으로 변환
+
+    예: "created_at >= NOW() - INTERVAL '3 months'" → "기간: 최근 3개월"
+        "status = 'DONE'" → "상태: 완료"
+        "merchant_id = 'mer_001'" → "가맹점: mer_001"
+    """
+    # 필드명 → 한글 라벨 매핑
+    FIELD_LABELS = {
+        "created_at": "기간",
+        "approved_at": "승인일",
+        "merchant_id": "가맹점",
+        "status": "상태",
+        "method": "결제수단",
+        "amount": "금액",
+        "order_name": "상품명",
+        "customer_id": "고객",
+        "payment_key": "결제키",
+        "settlement_date": "정산일",
+    }
+
+    # 상태값 한글 매핑
+    STATUS_LABELS = {
+        "DONE": "완료",
+        "CANCELED": "취소",
+        "PARTIAL_CANCELED": "부분취소",
+        "IN_PROGRESS": "진행중",
+        "READY": "대기",
+        "FAILED": "실패",
+        "EXPIRED": "만료",
+        "PENDING": "대기중",
+        "PROCESSED": "처리완료",
+        "PAID_OUT": "지급완료",
+        "ACTIVE": "활성",
+        "SUSPENDED": "정지",
+        "TERMINATED": "해지",
+    }
+
+    # 결제수단 한글 매핑
+    METHOD_LABELS = {
+        "CARD": "카드",
+        "VIRTUAL_ACCOUNT": "가상계좌",
+        "EASY_PAY": "간편결제",
+        "TRANSFER": "계좌이체",
+        "MOBILE": "모바일",
+        "BANK_TRANSFER": "계좌이체",
+    }
+
+    # 시간 단위 한글 매핑
+    TIME_UNIT_LABELS = {
+        "months": "개월",
+        "month": "개월",
+        "days": "일",
+        "day": "일",
+        "weeks": "주",
+        "week": "주",
+        "years": "년",
+        "year": "년",
+        "hours": "시간",
+        "hour": "시간",
+    }
+
+    # 필드명 추출
+    field = extract_condition_field(condition)
+    label = FIELD_LABELS.get(field, field) if field else None
+
+    # 패턴 1: INTERVAL (시간 범위)
+    # 예: "created_at >= NOW() - INTERVAL '3 months'"
+    interval_match = re.search(r"INTERVAL\s+'(\d+)\s+(\w+)'", condition, re.IGNORECASE)
+    if interval_match:
+        num, unit = interval_match.groups()
+        unit_kr = TIME_UNIT_LABELS.get(unit.lower(), unit)
+        return f"{label}: 최근 {num}{unit_kr}"
+
+    # 패턴 2: LIKE (부분 일치)
+    # 예: "order_name LIKE '%도서%'"
+    like_match = re.search(r"LIKE\s+'%([^%]+)%'", condition, re.IGNORECASE)
+    if like_match:
+        keyword = like_match.group(1)
+        return f"{label}: {keyword} 포함"
+
+    # 패턴 3: IN (다중 값)
+    # 예: "status IN ('DONE', 'CANCELED')"
+    in_match = re.search(r"IN\s*\(([^)]+)\)", condition, re.IGNORECASE)
+    if in_match:
+        values = in_match.group(1)
+        # 값 추출 및 변환
+        raw_values = re.findall(r"'([^']+)'", values)
+        if field == "status":
+            translated = [STATUS_LABELS.get(v, v) for v in raw_values]
+        elif field == "method":
+            translated = [METHOD_LABELS.get(v, v) for v in raw_values]
+        else:
+            translated = raw_values
+        return f"{label}: {', '.join(translated)}"
+
+    # 패턴 4: 범위 (BETWEEN)
+    # 예: "amount BETWEEN 10000 AND 50000"
+    between_match = re.search(r"BETWEEN\s+(\d+)\s+AND\s+(\d+)", condition, re.IGNORECASE)
+    if between_match:
+        low, high = between_match.groups()
+        return f"{label}: {int(low):,} ~ {int(high):,}"
+
+    # 패턴 5: 비교 연산자
+    # >= 패턴: "amount >= 100000"
+    gte_match = re.search(r">=\s*(\d+)", condition)
+    if gte_match and "INTERVAL" not in condition.upper():
+        value = int(gte_match.group(1))
+        return f"{label}: {value:,} 이상"
+
+    # <= 패턴
+    lte_match = re.search(r"<=\s*(\d+)", condition)
+    if lte_match:
+        value = int(lte_match.group(1))
+        return f"{label}: {value:,} 이하"
+
+    # > 패턴
+    gt_match = re.search(r"(?<!>)>\s*(\d+)", condition)
+    if gt_match and "INTERVAL" not in condition.upper() and ">=" not in condition:
+        value = int(gt_match.group(1))
+        return f"{label}: {value:,} 초과"
+
+    # < 패턴
+    lt_match = re.search(r"(?<!<)<\s*(\d+)", condition)
+    if lt_match and "<=" not in condition:
+        value = int(lt_match.group(1))
+        return f"{label}: {value:,} 미만"
+
+    # 패턴 6: 등호 (=) - 마지막에 처리 (다른 패턴 우선)
+    # 예: "status = 'DONE'" 또는 "merchant_id = 'mer_001'"
+    eq_match = re.search(r"=\s*'([^']+)'", condition)
+    if eq_match:
+        value = eq_match.group(1)
+        # 상태/결제수단 한글 변환
+        if field == "status":
+            value = STATUS_LABELS.get(value, value)
+        elif field == "method":
+            value = METHOD_LABELS.get(value, value)
+        return f"{label}: {value}"
+
+    # 기본: 원본 조건 반환 (변환 실패 시)
+    return condition
 
 
 def merge_where_conditions(existing: List[str], new: List[str]) -> List[str]:

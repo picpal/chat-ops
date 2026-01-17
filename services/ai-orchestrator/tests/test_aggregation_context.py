@@ -195,6 +195,7 @@ class TestAggregationContextToDict:
         ctx = AggregationContext(
             query_type="NEW_QUERY",
             based_on_filters=["status = 'DONE'", "merchant_id = 'mer_001'"],
+            humanized_filters=["상태: 완료", "가맹점: mer_001"],
             source_row_count=100,
             aggregations=[
                 AggregationInfo(function="SUM", target_column="amount", alias="total"),
@@ -208,6 +209,7 @@ class TestAggregationContextToDict:
 
         assert result["queryType"] == "NEW_QUERY"
         assert len(result["basedOnFilters"]) == 2
+        assert len(result["humanizedFilters"]) == 2
         assert result["sourceRowCount"] == 100
         assert len(result["aggregations"]) == 2
         assert result["hasGroupBy"] is True
@@ -218,6 +220,7 @@ class TestAggregationContextToDict:
         ctx = AggregationContext(
             query_type="NEW_QUERY",
             based_on_filters=[],
+            humanized_filters=[],
             source_row_count=None,
             aggregations=[
                 AggregationInfo(function="AVG", target_column="amount", alias="avg_amount")
@@ -232,6 +235,7 @@ class TestAggregationContextToDict:
         assert agg["function"] == "AVG"
         assert agg["targetColumn"] == "amount"
         assert agg["alias"] == "avg_amount"
+        assert result["humanizedFilters"] == []
 
 
 class TestIntegration:
