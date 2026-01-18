@@ -731,15 +731,18 @@ class TextToSqlService:
 
         try:
             rag_service = get_rag_service()
-            results = await rag_service.search(question, top_k=self._rag_top_k)
+            # search_docs() 메서드 사용 (search()는 존재하지 않음)
+            results = await rag_service.search_docs(query=question, k=self._rag_top_k)
 
             if not results:
                 return ""
 
             context_parts = []
             for doc in results:
-                context_parts.append(f"[{doc['type']}] {doc['title']}: {doc['content'][:500]}")
+                # Document 객체의 속성 접근
+                context_parts.append(f"[{doc.doc_type}] {doc.title}: {doc.content[:500]}")
 
+            logger.info(f"RAG context retrieved: {len(results)} documents")
             return "\n\n".join(context_parts)
         except Exception as e:
             logger.warning(f"RAG context retrieval failed: {e}")
