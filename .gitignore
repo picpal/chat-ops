@@ -33,6 +33,7 @@ logs/
 # Claude
 .claude/*
 !.claude/agents/
+!.claude/skills/
 
 # Test outputs
 services/ui/coverage/
