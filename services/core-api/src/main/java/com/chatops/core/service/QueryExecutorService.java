@@ -115,20 +115,21 @@ public class QueryExecutorService {
                 "executedAt", Instant.now().toString()
         ));
 
-        // Check if there are more pages
+        // Build pagination with all required fields
+        Map<String, Object> pagination = new HashMap<>();
+        pagination.put("currentPage", context.getCurrentPage() + 1);
+        pagination.put("totalRows", context.getTotalRows());
+        pagination.put("totalPages", context.getTotalPages());
+        pagination.put("pageSize", context.getPageSize());
+
         if (context.hasNextPage(rows.size())) {
             String nextToken = paginationService.createNextPageToken(context);
-            response.put("pagination", Map.of(
-                    "queryToken", nextToken,
-                    "hasMore", true,
-                    "currentPage", context.getCurrentPage() + 1
-            ));
+            pagination.put("queryToken", nextToken);
+            pagination.put("hasMore", true);
         } else {
-            response.put("pagination", Map.of(
-                    "hasMore", false,
-                    "currentPage", context.getCurrentPage() + 1
-            ));
+            pagination.put("hasMore", false);
         }
+        response.put("pagination", pagination);
 
         return response;
     }

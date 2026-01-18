@@ -2,7 +2,7 @@
 
 **작성일:** 2025-01-13
 **기능:** 대용량 데이터 서버 사이드 페이지네이션
-**상태:** ❌ 테스트 실패 (데이터 전달 이슈)
+**상태:** ⚠️ 부분 수정 (Core API 페이지 이동 수정, AI→UI 전달 미완)
 
 ---
 
@@ -155,7 +155,22 @@ UI receives (❌ 오류)
 
 | 날짜 | 테스터 | 결과 | 비고 |
 |------|--------|------|------|
+| 2026-01-18 | Claude | ⚠️ PARTIAL | Core API getPage/goToPage entity 복원 수정 |
 | 2025-01-13 | Claude | ❌ FAIL | pagination 데이터 전달 실패 |
+
+### 2026-01-18 수정 내용
+**문제:** `/api/v1/query/page/{token}` 호출 시 "entity is required" 오류
+**원인:** `QueryController`에서 `originalQueryPlan` 필드 복원 누락
+**수정:** `getPage()`, `goToPage()` 메서드에서 `putAll(originalPlan)` 적용
+**결과:** Core API 페이지 이동 API 정상 동작 ✅
+
+**남은 이슈:** AI Orchestrator → UI 간 pagination 전달 (별도 작업 필요)
+
+### 2026-01-18 추가 수정
+**문제:** 페이지 이동 시 pagination 필드 불완전 (totalRows, totalPages, pageSize 누락)
+**원인:** `QueryExecutorService.executePaginatedQuery()`에서 일부 필드만 반환
+**수정:** HashMap 사용하여 모든 필드 포함
+**결과:** 페이지 이동 API에서 모든 pagination 필드 정상 반환 ✅
 
 ---
 

@@ -74,7 +74,12 @@ public class QueryController {
         }
 
         // Execute query using the pagination context
+        // Restore all fields from original query plan and add pagination token
         Map<String, Object> queryPlanWithToken = new HashMap<>();
+        Map<String, Object> originalPlan = context.getOriginalQueryPlan();
+        if (originalPlan != null) {
+            queryPlanWithToken.putAll(originalPlan);
+        }
         queryPlanWithToken.put("queryToken", token);
         queryPlanWithToken.put("requestId", "page-" + token.substring(0, 8));
 
@@ -133,7 +138,12 @@ public class QueryController {
         }
 
         // Execute query using the updated context
+        // Restore all fields from original query plan and add pagination token
         Map<String, Object> queryPlanWithToken = new HashMap<>();
+        Map<String, Object> originalPlan = context.getOriginalQueryPlan();
+        if (originalPlan != null) {
+            queryPlanWithToken.putAll(originalPlan);
+        }
         queryPlanWithToken.put("queryToken", token);
         queryPlanWithToken.put("requestId", "page-" + token.substring(0, 8));
 
