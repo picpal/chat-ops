@@ -1,10 +1,12 @@
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useModal, useServerPagination } from '@/hooks'
 import { Icon, Badge } from '@/components/common'
 import { formatCurrency, formatDate, cn } from '@/utils'
 import { TableRenderSpec, TableColumn } from '@/types/renderSpec'
 
 const ROWS_PER_PAGE = 10
+// Stable empty array reference to prevent infinite loops
+const EMPTY_ROWS: any[] = []
 
 interface ServerPaginationInfo {
   queryToken?: string
@@ -26,7 +28,8 @@ const TableDetailModal: React.FC = () => {
   } | undefined
 
   const spec = modalData?.spec
-  const initialRows = modalData?.rows || []
+  // Use stable empty array reference to prevent infinite loops in useServerPagination
+  const initialRows = modalData?.rows || EMPTY_ROWS
   const serverPagination = modalData?.serverPagination
 
   // Extract table config with fallback
@@ -73,9 +76,8 @@ const TableDetailModal: React.FC = () => {
   useEffect(() => {
     if (isOpen && type === 'tableDetail') {
       setClientPage(1)
-      if (useServerSide) {
-        serverPaginationHook.goToPage(1)
-      }
+      // Note: useServerSide is always false, so this branch never executes
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }
   }, [isOpen, type])
 

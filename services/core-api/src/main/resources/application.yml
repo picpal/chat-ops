@@ -3,7 +3,7 @@ spring:
     name: core-api
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/chatops
+    url: jdbc:postgresql://localhost:5432/chatops?stringtype=unspecified
     username: chatops_user
     password: chatops_pass
     driver-class-name: org.postgresql.Driver

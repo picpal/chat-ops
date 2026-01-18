@@ -4,15 +4,19 @@ import ChatMessage from './ChatMessage'
 import { LoadingSpinner } from '@/components/common'
 
 const ChatInterface: React.FC = () => {
-  const { currentSessionId, sessions, isLoading } = useChatStore()
+  // Zustand selector pattern for stable references
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const sessions = useChatStore((state) => state.sessions)
+  const isLoading = useChatStore((state) => state.isLoading)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const currentSession = sessions.find((s) => s.id === currentSessionId)
 
   // Auto-scroll to bottom when new messages arrive
+  // Use messages.length to avoid unstable array reference comparison
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [currentSession?.messages])
+  }, [currentSession?.messages?.length])
 
   if (!currentSessionId || !currentSession) {
     return (

@@ -59,7 +59,7 @@ services:
     container_name: chatops-core-api
     environment:
       - SPRING_PROFILES_ACTIVE=docker
-      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB:-chatops}
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB:-chatops}?stringtype=unspecified
       - SPRING_DATASOURCE_USERNAME=${POSTGRES_USER:-chatops_user}
       - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD:-chatops_pass}
     ports:

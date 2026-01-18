@@ -20,11 +20,15 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api/v1/chat': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8080',
         changeOrigin: true,
       },
       '/api/v1/query': {
         target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      '/chat': {
+        target: 'http://localhost:8000',
         changeOrigin: true,
       },
     },

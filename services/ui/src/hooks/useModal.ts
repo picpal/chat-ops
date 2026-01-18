@@ -1,20 +1,26 @@
+import { useCallback } from 'react'
 import { useUIStore, ModalType } from '@/store'
 
 export const useModal = () => {
-  const { modal, openModal, closeModal } = useUIStore()
+  // Zustand selector pattern - select individual primitives for stable references
+  const isOpen = useUIStore((state) => state.modal.isOpen)
+  const type = useUIStore((state) => state.modal.type)
+  const data = useUIStore((state) => state.modal.data)
+  const openModal = useUIStore((state) => state.openModal)
+  const closeModal = useUIStore((state) => state.closeModal)
 
-  const open = (type: NonNullable<ModalType>, data?: any) => {
+  const open = useCallback((type: NonNullable<ModalType>, data?: any) => {
     openModal(type, data)
-  }
+  }, [openModal])
 
-  const close = () => {
+  const close = useCallback(() => {
     closeModal()
-  }
+  }, [closeModal])
 
   return {
-    isOpen: modal.isOpen,
-    type: modal.type,
-    data: modal.data,
+    isOpen,
+    type,
+    data,
     open,
     close,
   }

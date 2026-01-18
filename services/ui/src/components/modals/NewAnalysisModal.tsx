@@ -6,17 +6,25 @@ import { ICONS } from '@/utils'
 
 const NewAnalysisModal: React.FC = () => {
   const { isOpen, type, close } = useModal()
-  const { createSession } = useChatStore()
+  const { syncCreateSession } = useChatStore()
   const [title, setTitle] = useState('')
+  const [isCreating, setIsCreating] = useState(false)
 
   if (!isOpen || type !== 'newAnalysis') return null
 
-  const handleConfirm = () => {
-    if (!title.trim()) return
+  const handleConfirm = async () => {
+    if (!title.trim() || isCreating) return
 
-    createSession(title.trim())
-    setTitle('')
-    close()
+    setIsCreating(true)
+    try {
+      await syncCreateSession(title.trim())
+      setTitle('')
+      close()
+    } catch (error) {
+      console.error('[NewAnalysisModal] Failed to create session:', error)
+    } finally {
+      setIsCreating(false)
+    }
   }
 
   const handleClose = () => {
@@ -88,6 +96,7 @@ const NewAnalysisModal: React.FC = () => {
                 onClick={handleClose}
                 variant="secondary"
                 className="flex-1"
+                disabled={isCreating}
               >
                 Cancel
               </Button>
@@ -95,9 +104,9 @@ const NewAnalysisModal: React.FC = () => {
                 onClick={handleConfirm}
                 variant="primary"
                 className="flex-1"
-                disabled={!title.trim()}
+                disabled={!title.trim() || isCreating}
               >
-                Confirm
+                {isCreating ? 'Creating...' : 'Confirm'}
               </Button>
             </div>
           </div>

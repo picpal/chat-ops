@@ -9,12 +9,21 @@ import {
   type Aggregation,
 } from '@/utils/aggregateUtils'
 import type { QueryFilter } from '@/types/queryPlan'
+import {
+  chatPersistenceApi,
+  SessionResponse,
+  MessageResponse,
+} from '@/api/chatPersistenceApi'
 
 interface ChatState {
   currentSessionId: string | null
   sessions: ConversationSession[]
   isLoading: boolean
   error: string | null
+
+  // Server sync state
+  currentUserId: string | null
+  isSyncing: boolean
 
   // Actions
   createSession: (title: string, subtitle?: string, icon?: string) => string
@@ -35,6 +44,14 @@ interface ChatState {
     option: string,
     metadata?: ClarificationRenderSpec['metadata']
   ) => void
+
+  // Server sync actions
+  setCurrentUser: (userId: string) => void
+  loadSessionsFromServer: () => Promise<void>
+  loadSessionMessages: (sessionId: string) => Promise<void>
+  syncCreateSession: (title: string, subtitle?: string, icon?: string) => Promise<string>
+  syncAddMessage: (sessionId: string, message: ChatMessage) => Promise<void>
+  syncDeleteSession: (sessionId: string) => Promise<void>
 }
 
 const getSessionCategory = (timestamp: string): SessionCategory => {
@@ -48,11 +65,49 @@ const getSessionCategory = (timestamp: string): SessionCategory => {
   return 'older'
 }
 
+// Helper to convert server response to local session format
+const convertServerSessionToLocal = (
+  serverSession: SessionResponse
+): ConversationSession => {
+  const timestamp = serverSession.updatedAt || serverSession.createdAt
+  return {
+    id: serverSession.sessionId,
+    title: serverSession.title,
+    subtitle: serverSession.subtitle,
+    icon: serverSession.icon,
+    timestamp,
+    category: getSessionCategory(timestamp),
+    messages: serverSession.messages
+      ? serverSession.messages.map(convertServerMessageToLocal)
+      : [],
+  }
+}
+
+// Helper to convert server message to local format
+const convertServerMessageToLocal = (
+  serverMessage: MessageResponse
+): ChatMessage => {
+  return {
+    id: serverMessage.messageId,
+    role: serverMessage.role as 'user' | 'assistant',
+    content: serverMessage.content,
+    renderSpec: serverMessage.renderSpec as ChatMessage['renderSpec'],
+    queryResult: serverMessage.queryResult as ChatMessage['queryResult'],
+    queryPlan: serverMessage.queryPlan as ChatMessage['queryPlan'],
+    timestamp: serverMessage.createdAt,
+    status: (serverMessage.status as ChatMessage['status']) || 'success',
+  }
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   currentSessionId: null,
   sessions: [],
   isLoading: false,
   error: null,
+
+  // Server sync state
+  currentUserId: null,
+  isSyncing: false,
 
   createSession: (title: string, subtitle?: string, icon?: string) => {
     const timestamp = new Date().toISOString()
@@ -276,6 +331,149 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
 
       get().addMessage(currentSessionId, assistantMessage)
+    }
+  },
+
+  // Server sync actions
+  setCurrentUser: (userId: string) => {
+    set({ currentUserId: userId })
+  },
+
+  loadSessionsFromServer: async () => {
+    const { currentUserId } = get()
+    if (!currentUserId) {
+      console.warn('[chatStore] No current user ID, cannot load sessions')
+      return
+    }
+
+    try {
+      const serverSessions = await chatPersistenceApi.getSessions(currentUserId)
+      const localSessions = serverSessions.map(convertServerSessionToLocal)
+
+      // Sort by updatedAt descending
+      localSessions.sort(
+        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      )
+
+      set({ sessions: localSessions })
+      console.log('[chatStore] Loaded sessions from server:', localSessions.length)
+    } catch (error) {
+      console.error('[chatStore] Failed to load sessions from server:', error)
+      // Keep existing local sessions on error
+    }
+  },
+
+  loadSessionMessages: async (sessionId: string) => {
+    const { sessions } = get()
+    const existingSession = sessions.find((s) => s.id === sessionId)
+
+    // Skip if messages already loaded
+    if (existingSession && existingSession.messages.length > 0) {
+      console.log('[chatStore] Session already has messages, skipping load')
+      return
+    }
+
+    try {
+      const serverSession = await chatPersistenceApi.getSessionWithMessages(sessionId)
+      const messages = serverSession.messages
+        ? serverSession.messages.map(convertServerMessageToLocal)
+        : []
+
+      set((state) => ({
+        sessions: state.sessions.map((session) =>
+          session.id === sessionId ? { ...session, messages } : session
+        ),
+      }))
+      console.log('[chatStore] Loaded messages for session:', sessionId, messages.length)
+    } catch (error) {
+      console.error('[chatStore] Failed to load session messages:', error)
+    }
+  },
+
+  syncCreateSession: async (
+    title: string,
+    subtitle?: string,
+    icon?: string
+  ): Promise<string> => {
+    const { currentUserId, createSession } = get()
+
+    // Optimistic update - create session locally first
+    const localSessionId = createSession(title, subtitle, icon)
+
+    if (!currentUserId) {
+      console.warn('[chatStore] No current user ID, session created locally only')
+      return localSessionId
+    }
+
+    try {
+      const serverSession = await chatPersistenceApi.createSession(currentUserId, {
+        title,
+        subtitle,
+        icon,
+      })
+
+      // Update local session with server ID
+      set((state) => ({
+        sessions: state.sessions.map((session) =>
+          session.id === localSessionId
+            ? { ...session, id: serverSession.sessionId }
+            : session
+        ),
+        currentSessionId:
+          state.currentSessionId === localSessionId
+            ? serverSession.sessionId
+            : state.currentSessionId,
+      }))
+
+      console.log('[chatStore] Session synced to server:', serverSession.sessionId)
+      return serverSession.sessionId
+    } catch (error) {
+      console.error('[chatStore] Failed to sync session to server:', error)
+      // Keep local session even if server sync fails
+      return localSessionId
+    }
+  },
+
+  syncAddMessage: async (sessionId: string, message: ChatMessage): Promise<void> => {
+    const { currentUserId } = get()
+
+    // Optimistic update is already done by addMessage
+    // This just syncs to server
+
+    if (!currentUserId) {
+      console.warn('[chatStore] No current user ID, message stored locally only')
+      return
+    }
+
+    try {
+      await chatPersistenceApi.addMessage(sessionId, {
+        messageId: message.id,
+        role: message.role,
+        content: message.content,
+        renderSpec: message.renderSpec,
+        queryResult: message.queryResult,
+        queryPlan: message.queryPlan,
+        status: message.status,
+      })
+      console.log('[chatStore] Message synced to server:', message.id)
+    } catch (error) {
+      console.error('[chatStore] Failed to sync message to server:', error)
+      // Message is already in local state, just log the error
+    }
+  },
+
+  syncDeleteSession: async (sessionId: string): Promise<void> => {
+    const { deleteSession } = get()
+
+    // Optimistic update - delete locally first
+    deleteSession(sessionId)
+
+    try {
+      await chatPersistenceApi.deleteSession(sessionId)
+      console.log('[chatStore] Session deleted from server:', sessionId)
+    } catch (error) {
+      console.error('[chatStore] Failed to delete session from server:', error)
+      // Session is already removed from local state
     }
   },
 }))

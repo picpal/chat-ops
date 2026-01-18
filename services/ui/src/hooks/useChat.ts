@@ -12,8 +12,15 @@ import {
 import type { QueryFilter } from '@/types/queryPlan'
 
 export const useChat = () => {
-  const { currentSessionId, addMessage, updateMessage, setLoading, setError, getCurrentSession } =
-    useChatStore()
+  const {
+    currentSessionId,
+    addMessage,
+    updateMessage,
+    setLoading,
+    setError,
+    getCurrentSession,
+    syncAddMessage,
+  } = useChatStore()
 
   const sendMessageMutation = useMutation({
     mutationFn: aiOrchestratorApi.sendMessage,
@@ -33,6 +40,9 @@ export const useChat = () => {
 
       if (currentSessionId) {
         addMessage(currentSessionId, userMessage)
+
+        // Sync user message to server (fire and forget)
+        syncAddMessage(currentSessionId, { ...userMessage, status: 'success' })
       }
 
       return { userMessageId }
@@ -116,6 +126,8 @@ export const useChat = () => {
           }
 
           addMessage(currentSessionId, assistantMessage)
+          // Sync assistant message to server
+          syncAddMessage(currentSessionId, assistantMessage)
         } else {
           // 대상 결과를 찾지 못한 경우
           const errorMessage: ChatMessage = {
@@ -126,6 +138,7 @@ export const useChat = () => {
             status: 'error',
           }
           addMessage(currentSessionId, errorMessage)
+          syncAddMessage(currentSessionId, errorMessage)
         }
 
         setLoading(false)
@@ -206,6 +219,8 @@ export const useChat = () => {
           }
 
           addMessage(currentSessionId, assistantMessage)
+          // Sync assistant message to server
+          syncAddMessage(currentSessionId, assistantMessage)
         } else {
           // 대상 결과를 찾지 못한 경우
           const errorMessage: ChatMessage = {
@@ -216,6 +231,7 @@ export const useChat = () => {
             status: 'error',
           }
           addMessage(currentSessionId, errorMessage)
+          syncAddMessage(currentSessionId, errorMessage)
         }
 
         setLoading(false)
@@ -235,6 +251,8 @@ export const useChat = () => {
       }
 
       addMessage(currentSessionId, assistantMessage)
+      // Sync assistant message to server
+      syncAddMessage(currentSessionId, assistantMessage)
       setLoading(false)
     },
     onError: (error: Error, _variables, context) => {

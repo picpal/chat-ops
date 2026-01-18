@@ -5,10 +5,18 @@ import { SESSION_CATEGORIES, ICONS } from '@/utils'
 import { SessionCategory } from '@/types/chat'
 
 const Sidebar: React.FC = () => {
-  const { sessions, currentSessionId, setCurrentSession } =
-    useChatStore()
-  const { openModal, sidebarCollapsed, toggleSidebar } = useUIStore()
+  // Zustand selector pattern for stable references
+  const sessions = useChatStore((state) => state.sessions)
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const setCurrentSession = useChatStore((state) => state.setCurrentSession)
+  const loadSessionMessages = useChatStore((state) => state.loadSessionMessages)
+  const syncDeleteSession = useChatStore((state) => state.syncDeleteSession)
+
+  const openModal = useUIStore((state) => state.openModal)
+  const sidebarCollapsed = useUIStore((state) => state.sidebarCollapsed)
+  const toggleSidebar = useUIStore((state) => state.toggleSidebar)
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
+  const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null)
   const userMenuRef = useRef<HTMLDivElement>(null)
 
   // Close menu when clicking outside
@@ -24,6 +32,22 @@ const Sidebar: React.FC = () => {
 
   const handleNewChat = () => {
     openModal('newAnalysis')
+  }
+
+  const handleSessionClick = async (sessionId: string) => {
+    setCurrentSession(sessionId)
+    // Load messages from server if not already loaded
+    await loadSessionMessages(sessionId)
+  }
+
+  const handleDeleteSession = async (
+    e: React.MouseEvent,
+    sessionId: string
+  ) => {
+    e.stopPropagation() // Prevent session selection
+    if (window.confirm('이 채팅을 삭제하시겠습니까?')) {
+      await syncDeleteSession(sessionId)
+    }
   }
 
   // Keyboard shortcut: Cmd/Ctrl + Shift + S
@@ -104,22 +128,38 @@ const Sidebar: React.FC = () => {
                   <div className="space-y-0.5">
                     {categorySessions.map((session) => {
                       const isActive = session.id === currentSessionId
+                      const isHovered = session.id === hoveredSessionId
                       return (
-                        <button
+                        <div
                           key={session.id}
-                          onClick={() => setCurrentSession(session.id)}
-                          className={`w-full px-3 py-2 rounded-lg text-left transition-all ${
+                          className={`relative flex items-center rounded-lg transition-all ${
                             isActive
                               ? 'bg-stone-200/70'
                               : 'hover:bg-stone-200/50'
                           }`}
+                          onMouseEnter={() => setHoveredSessionId(session.id)}
+                          onMouseLeave={() => setHoveredSessionId(null)}
                         >
-                          <p className={`text-sm truncate ${
-                            isActive ? 'text-stone-900 font-medium' : 'text-stone-600'
-                          }`}>
-                            {session.title}
-                          </p>
-                        </button>
+                          <button
+                            onClick={() => handleSessionClick(session.id)}
+                            className="w-full px-3 py-2 text-left"
+                          >
+                            <p className={`text-sm truncate pr-6 ${
+                              isActive ? 'text-stone-900 font-medium' : 'text-stone-600'
+                            }`}>
+                              {session.title}
+                            </p>
+                          </button>
+                          {isHovered && (
+                            <button
+                              onClick={(e) => handleDeleteSession(e, session.id)}
+                              className="absolute right-2 p-1 rounded hover:bg-stone-300/50 text-stone-400 hover:text-stone-600 transition-colors"
+                              title="삭제"
+                            >
+                              <Icon name={ICONS.CLOSE} className="text-[14px]" />
+                            </button>
+                          )}
+                        </div>
                       )
                     })}
                   </div>
