@@ -3,9 +3,10 @@ import { useChatStore } from '@/store'
 import { chatPersistenceApi } from '@/api/chatPersistenceApi'
 
 const CHAT_USER_ID_KEY = 'chatUserId'
+const CURRENT_SESSION_KEY = 'chatCurrentSessionId'
 
 export const useInitializeChat = () => {
-  const { setCurrentUser, loadSessionsFromServer, currentUserId } = useChatStore()
+  const { setCurrentUser, loadSessionsFromServer, setCurrentSession, loadSessionMessages, currentUserId } = useChatStore()
   const [isInitializing, setIsInitializing] = useState(true)
   const initializedRef = useRef(false)
 
@@ -41,6 +42,24 @@ export const useInitializeChat = () => {
 
         // 4. Load sessions from server
         await loadSessionsFromServer()
+
+        // 5. Restore last selected session from localStorage
+        const savedSessionId = localStorage.getItem(CURRENT_SESSION_KEY)
+        if (savedSessionId) {
+          // Verify the session exists in loaded sessions
+          const sessions = useChatStore.getState().sessions
+          const sessionExists = sessions.some(s => s.id === savedSessionId)
+
+          if (sessionExists) {
+            setCurrentSession(savedSessionId)
+            await loadSessionMessages(savedSessionId)
+            console.log('[useInitializeChat] Restored session:', savedSessionId)
+          } else {
+            // Session no longer exists, clear localStorage
+            localStorage.removeItem(CURRENT_SESSION_KEY)
+            console.log('[useInitializeChat] Saved session not found, cleared localStorage')
+          }
+        }
 
         console.log('[useInitializeChat] Chat initialized with userId:', userId)
       } catch (error) {

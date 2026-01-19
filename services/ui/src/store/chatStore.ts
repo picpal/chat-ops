@@ -15,6 +15,9 @@ import {
   MessageResponse,
 } from '@/api/chatPersistenceApi'
 
+// localStorage key for persisting current session
+const CURRENT_SESSION_KEY = 'chatCurrentSessionId'
+
 interface ChatState {
   currentSessionId: string | null
   sessions: ConversationSession[]
@@ -130,6 +133,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   setCurrentSession: (sessionId: string) => {
+    // Persist to localStorage for restoration after refresh
+    localStorage.setItem(CURRENT_SESSION_KEY, sessionId)
     set({ currentSessionId: sessionId })
   },
 
@@ -463,7 +468,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   syncDeleteSession: async (sessionId: string): Promise<void> => {
-    const { deleteSession } = get()
+    const { deleteSession, currentSessionId } = get()
+
+    // Clear localStorage if deleting the current session
+    if (currentSessionId === sessionId) {
+      localStorage.removeItem(CURRENT_SESSION_KEY)
+    }
 
     // Optimistic update - delete locally first
     deleteSession(sessionId)
