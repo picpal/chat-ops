@@ -19,6 +19,8 @@ dependencies = [
     "pgvector>=0.2.0",
     # Environment management
     "python-dotenv>=1.0.0",
+    # Excel file generation
+    "openpyxl>=3.1.0",
 ]
 
 [project.optional-dependencies]

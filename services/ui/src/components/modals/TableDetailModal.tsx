@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import { useModal, useServerPagination } from '@/hooks'
 import { Icon, Badge } from '@/components/common'
 import { formatCurrency, formatDate, cn } from '@/utils'
@@ -19,6 +19,8 @@ interface ServerPaginationInfo {
 const TableDetailModal: React.FC = () => {
   const { isOpen, type, data, close } = useModal()
   const [clientPage, setClientPage] = useState(1)
+  const [isDownloading, setIsDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
 
   // Extract modal data
   const modalData = data as {
@@ -69,6 +71,68 @@ const TableDetailModal: React.FC = () => {
       serverPaginationHook.goToPage(page)
     } else {
       setClientPage(page)
+    }
+  }
+
+  // Download handler
+  const handleDownload = async (format: 'csv' | 'excel') => {
+    console.log('[TableDetailModal] handleDownload called', {
+      hasSpec: !!spec,
+      hasMetadata: !!spec?.metadata,
+      metadata: spec?.metadata,
+      sql: spec?.metadata?.sql
+    })
+    const sql = spec?.metadata?.sql
+    if (!sql) {
+      setDownloadError('SQL 정보가 없어 다운로드할 수 없습니다.')
+      return
+    }
+
+    setIsDownloading(true)
+    setDownloadError(null)
+
+    try {
+      const response = await fetch('/api/v1/chat/download', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ sql, format }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.detail || `다운로드 실패: ${response.status}`)
+      }
+
+      // Blob으로 변환
+      const blob = await response.blob()
+
+      // 파일명 추출 (Content-Disposition 헤더에서)
+      const contentDisposition = response.headers.get('Content-Disposition')
+      let filename = `query_result.${format === 'csv' ? 'csv' : 'xlsx'}`
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename[^;=\n]*=(['"]?)([^'"\n;]*)\1/)
+        if (match && match[2]) {
+          filename = match[2]
+        }
+      }
+
+      // 다운로드 트리거
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+
+    } catch (error) {
+      console.error('Download failed:', error)
+      setDownloadError(error instanceof Error ? error.message : '다운로드 실패')
+    } finally {
+      setIsDownloading(false)
     }
   }
 
@@ -156,23 +220,47 @@ const TableDetailModal: React.FC = () => {
           <div className="flex items-center gap-3">
             {/* Download Button */}
             <div className="relative group">
-              <button className="p-2 text-slate-500 hover:text-primary hover:bg-slate-50 rounded-lg transition-colors border border-slate-200 shadow-sm flex items-center gap-2 bg-slate-50/50">
+              <button
+                className={cn(
+                  "p-2 text-slate-500 hover:text-primary hover:bg-slate-50 rounded-lg transition-colors border border-slate-200 shadow-sm flex items-center gap-2 bg-slate-50/50",
+                  (!spec?.metadata?.sql || isDownloading) && "opacity-50 cursor-not-allowed"
+                )}
+                disabled={!spec?.metadata?.sql || isDownloading}
+              >
                 <Icon name="download" size="sm" />
-                <span className="text-sm font-medium hidden sm:block">Download</span>
+                <span className="text-sm font-medium hidden sm:block">
+                  {isDownloading ? '다운로드 중...' : 'Download'}
+                </span>
               </button>
               {/* Dropdown (shown on hover) */}
               <div className="absolute right-0 top-full mt-2 w-56 bg-white rounded-xl shadow-xl border border-slate-100 py-2 z-50 ring-1 ring-black/5 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all">
                 <div className="px-3 py-2 text-xs font-semibold text-slate-400 uppercase tracking-wider">
                   Export Options
                 </div>
-                <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 hover:text-primary transition-colors">
-                  <Icon name="table_view" className="text-emerald-600" />
-                  Download as Excel
-                </button>
-                <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 hover:text-primary transition-colors">
-                  <Icon name="picture_as_pdf" className="text-red-500" />
-                  Download as PDF
-                </button>
+                {!spec?.metadata?.sql ? (
+                  <div className="px-4 py-2 text-sm text-slate-400">
+                    SQL 정보가 없어 다운로드할 수 없습니다
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => handleDownload('excel')}
+                      disabled={isDownloading}
+                      className="w-full flex items-center gap-3 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 hover:text-primary transition-colors disabled:opacity-50"
+                    >
+                      <Icon name="table_view" className="text-emerald-600" />
+                      Download as Excel
+                    </button>
+                    <button
+                      onClick={() => handleDownload('csv')}
+                      disabled={isDownloading}
+                      className="w-full flex items-center gap-3 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 hover:text-primary transition-colors disabled:opacity-50"
+                    >
+                      <Icon name="description" className="text-blue-500" />
+                      Download as CSV
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 
@@ -187,6 +275,20 @@ const TableDetailModal: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* Download Error Message */}
+        {downloadError && (
+          <div className="px-6 py-3 bg-red-50 border-b border-red-200 flex items-center gap-2 shrink-0">
+            <Icon name="error" className="text-red-500" size="sm" />
+            <span className="text-red-700 text-sm">{downloadError}</span>
+            <button
+              onClick={() => setDownloadError(null)}
+              className="ml-auto p-1 text-red-400 hover:text-red-600"
+            >
+              <Icon name="close" size="sm" />
+            </button>
+          </div>
+        )}
 
         {/* Table Content */}
         <div className="flex-1 overflow-auto bg-slate-50/30 p-0 relative">

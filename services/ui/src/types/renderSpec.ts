@@ -63,6 +63,10 @@ export interface TableRenderSpec extends BaseRenderSpec {
   table: TableConfig
   fullData?: any[]  // Full data for modal (when preview mode is enabled)
   preview?: PreviewConfig
+  metadata?: {
+    sql?: string
+    executionTimeMs?: number
+  }
 }
 
 // Text Renderer Types

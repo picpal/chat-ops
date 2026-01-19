@@ -1371,10 +1371,89 @@ async def download_query_result(request: DownloadRequest):
             logger.error(f"Download SQL execution failed: {e}")
             yield f"Error: {str(e)}"
 
+    def generate_excel() -> bytes:
+        """Excel 파일 생성 (메모리 내)"""
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+        import psycopg
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Query Result"
+
+        try:
+            with text_to_sql._get_readonly_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(unlimited_sql)
+
+                    # 헤더 행 스타일
+                    columns = [desc[0] for desc in cur.description]
+                    header_font = Font(bold=True, color="FFFFFF")
+                    header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
+
+                    for col_idx, col_name in enumerate(columns, 1):
+                        cell = ws.cell(row=1, column=col_idx, value=col_name)
+                        cell.font = header_font
+                        cell.fill = header_fill
+                        cell.alignment = Alignment(horizontal="center")
+
+                    # 데이터 배치 처리 (1000건씩)
+                    batch_size = 1000
+                    row_num = 2
+                    while True:
+                        rows = cur.fetchmany(batch_size)
+                        if not rows:
+                            break
+
+                        for row in rows:
+                            values = row.values() if hasattr(row, 'values') else row
+                            for col_idx, value in enumerate(values, 1):
+                                # datetime을 ISO format 문자열로 변환
+                                if hasattr(value, 'isoformat'):
+                                    value = value.isoformat()
+                                # dict/list (JSONB)를 JSON 문자열로 변환
+                                elif isinstance(value, (dict, list)):
+                                    import json
+                                    value = json.dumps(value, ensure_ascii=False, default=str)
+                                ws.cell(row=row_num, column=col_idx, value=value)
+                            row_num += 1
+
+                    logger.info(f"Excel generation completed: {row_num - 2} rows")
+
+        except psycopg.Error as e:
+            logger.error(f"Excel SQL execution failed: {e}")
+            raise HTTPException(500, f"Excel generation failed: {str(e)}")
+
+        # BytesIO로 저장
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return output.getvalue()
+
     # 파일명 생성
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    filename = f"query_result_{timestamp}.csv"
 
+    # format에 따라 분기 처리
+    if request.format == "excel":
+        try:
+            excel_data = generate_excel()
+            filename = f"query_result_{timestamp}.xlsx"
+
+            from fastapi.responses import Response
+            return Response(
+                content=excel_data,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": f"attachment; filename={filename}",
+                    "X-Content-Type-Options": "nosniff"
+                }
+            )
+        except Exception as e:
+            logger.error(f"Excel download failed: {e}")
+            raise HTTPException(500, f"Excel generation failed: {str(e)}")
+
+    # CSV 응답 (기본)
+    filename = f"query_result_{timestamp}.csv"
     return StreamingResponse(
         generate_csv(),
         media_type="text/csv; charset=utf-8",

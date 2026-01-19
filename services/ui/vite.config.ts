@@ -19,6 +19,12 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
+      // AI Orchestrator endpoints (must be before /api/v1/chat to take precedence)
+      '/api/v1/chat/download': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      // Core API session/message endpoints
       '/api/v1/chat': {
         target: 'http://localhost:8080',
         changeOrigin: true,
