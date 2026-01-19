@@ -452,3 +452,457 @@ class TestRenderTypeDetection:
         )
         # groupBy가 있고 여러 행이 있으면 테이블이 기본
         assert spec["type"] == "table", "명시적 키워드 없이 집계 결과는 table이 기본"
+
+
+class TestChartTypeFieldBasedDetermination:
+    """
+    차트 타입 자동 결정 테스트 - 필드 타입 기반 로직
+    핵심 원칙: 필드 타입 우선 → 키워드는 세부 조정
+    """
+
+    def setup_method(self):
+        self.composer = RenderComposerService()
+
+    def test_merchant_groupby_returns_bar(self):
+        """
+        merchantId 그룹화는 bar 차트
+        카테고리 필드는 기본적으로 bar 차트로 표시
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"merchantId": "M001", "count": 100, "totalAmount": 500000},
+                    {"merchantId": "M002", "count": 80, "totalAmount": 400000},
+                    {"merchantId": "M003", "count": 60, "totalAmount": 300000}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["merchantId"],
+            "aggregations": [
+                {"function": "count", "field": "*", "alias": "count"},
+                {"function": "sum", "field": "amount", "alias": "totalAmount"}
+            ]
+        }
+
+        # "추이 그래프"라고 해도 merchantId는 카테고리이므로 bar
+        chart_type = self.composer._determine_chart_type(
+            query_plan,
+            query_result["data"]["rows"],
+            "가맹점별 매출 추이 그래프"
+        )
+        assert chart_type == "bar", "merchantId 그룹화는 '추이' 키워드가 있어도 bar"
+
+    def test_merchant_groupby_explicit_bar_keyword(self):
+        """
+        merchantId 그룹화 + 명시적 bar 키워드
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"merchantId": "M001", "count": 100},
+                    {"merchantId": "M002", "count": 80}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["merchantId"],
+            "aggregations": [{"function": "count", "field": "*", "alias": "count"}]
+        }
+
+        chart_type = self.composer._determine_chart_type(
+            query_plan,
+            query_result["data"]["rows"],
+            "가맹점별 매출 막대 그래프"
+        )
+        assert chart_type == "bar", "merchantId + '막대' 키워드 = bar"
+
+    def test_date_groupby_returns_line(self):
+        """
+        시계열 필드 그룹화는 line 차트
+        approvedAt, createdAt 등은 기본적으로 line 차트
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"approvedAt": "2024-01-01", "count": 100},
+                    {"approvedAt": "2024-01-02", "count": 120},
+                    {"approvedAt": "2024-01-03", "count": 90}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["approvedAt"],
+            "aggregations": [{"function": "count", "field": "*", "alias": "count"}]
+        }
+
+        chart_type = self.composer._determine_chart_type(
+            query_plan,
+            query_result["data"]["rows"],
+            "일별 결제 현황 그래프"
+        )
+        assert chart_type == "line", "시계열 필드 groupBy는 line"
+
+    def test_date_groupby_with_trend_keyword(self):
+        """
+        시계열 필드 + 추이 키워드는 line 차트
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"createdAt": "2024-01-01", "count": 100},
+                    {"createdAt": "2024-01-02", "count": 120}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["createdAt"],
+            "aggregations": [{"function": "count", "field": "*", "alias": "count"}]
+        }
+
+        chart_type = self.composer._determine_chart_type(
+            query_plan,
+            query_result["data"]["rows"],
+            "일별 결제 추이 그래프"
+        )
+        assert chart_type == "line", "시계열 + '추이' = line"
+
+    def test_category_with_ratio_returns_pie(self):
+        """
+        카테고리 그룹화 + 비율 키워드는 pie 차트
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"status": "DONE", "count": 100},
+                    {"status": "CANCELED", "count": 20},
+                    {"status": "PENDING", "count": 10}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["status"],
+            "aggregations": [{"function": "count", "field": "*", "alias": "count"}]
+        }
+
+        chart_type = self.composer._determine_chart_type(
+            query_plan,
+            query_result["data"]["rows"],
+            "상태별 비율 차트"
+        )
+        assert chart_type == "pie", "카테고리 + '비율' = pie"
+
+    def test_method_groupby_returns_bar(self):
+        """
+        method (결제수단) 그룹화는 bar 차트
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"method": "CARD", "count": 500},
+                    {"method": "TRANSFER", "count": 200},
+                    {"method": "EASY_PAY", "count": 300}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["method"],
+            "aggregations": [{"function": "count", "field": "*", "alias": "count"}]
+        }
+
+        chart_type = self.composer._determine_chart_type(
+            query_plan,
+            query_result["data"]["rows"],
+            "결제수단별 현황 그래프"
+        )
+        assert chart_type == "bar", "method 그룹화는 bar"
+
+    def test_category_ignores_line_keywords(self):
+        """
+        카테고리 필드는 line 키워드를 무시 (핵심 테스트)
+        "가맹점별 매출 추이 그래프"에서 "추이"가 있어도 bar 유지
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"merchantId": "M001", "count": 100},
+                    {"merchantId": "M002", "count": 80},
+                    {"merchantId": "M003", "count": 60},
+                    {"merchantId": "M004", "count": 40},
+                    {"merchantId": "M005", "count": 30},
+                    {"merchantId": "M006", "count": 20},
+                    {"merchantId": "M007", "count": 15},
+                    {"merchantId": "M008", "count": 10}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["merchantId"],
+            "aggregations": [{"function": "count", "field": "*", "alias": "count"}]
+        }
+
+        # 8개 가맹점 데이터 + "추이" 키워드
+        # 이전 로직: 5개 초과 + "추이" → line (❌ 잘못됨)
+        # 새 로직: merchantId는 카테고리 → bar (✅ 올바름)
+        chart_type = self.composer._determine_chart_type(
+            query_plan,
+            query_result["data"]["rows"],
+            "가맹점별 매출 추이 그래프"
+        )
+        assert chart_type == "bar", "카테고리 필드는 line 키워드('추이')를 무시하고 bar 유지"
+
+    def test_explicit_bar_overrides_date_field(self):
+        """
+        시계열 필드여도 명시적 bar 키워드가 있으면 bar
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"approvedAt": "2024-01-01", "count": 100},
+                    {"approvedAt": "2024-01-02", "count": 120}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["approvedAt"],
+            "aggregations": [{"function": "count", "field": "*", "alias": "count"}]
+        }
+
+        chart_type = self.composer._determine_chart_type(
+            query_plan,
+            query_result["data"]["rows"],
+            "일별 결제 막대 그래프로 보여줘"
+        )
+        assert chart_type == "bar", "시계열이어도 '막대' 키워드가 있으면 bar"
+
+    def test_unknown_field_uses_row_count(self):
+        """
+        알 수 없는 필드는 행 수에 따라 결정
+        5개 이하: bar, 6개 이상: line
+        """
+        query_result_small = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"customField": "A", "count": 100},
+                    {"customField": "B", "count": 80},
+                    {"customField": "C", "count": 60}
+                ]
+            }
+        }
+        query_result_large = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"customField": "A", "count": 100},
+                    {"customField": "B", "count": 80},
+                    {"customField": "C", "count": 60},
+                    {"customField": "D", "count": 40},
+                    {"customField": "E", "count": 30},
+                    {"customField": "F", "count": 20}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Custom",
+            "operation": "aggregate",
+            "groupBy": ["customField"],
+            "aggregations": [{"function": "count", "field": "*", "alias": "count"}]
+        }
+
+        # 3개 (5개 이하) → bar
+        chart_type = self.composer._determine_chart_type(
+            query_plan,
+            query_result_small["data"]["rows"],
+            "커스텀 데이터 그래프"
+        )
+        assert chart_type == "bar", "5개 이하 데이터는 bar"
+
+        # 6개 (5개 초과) → line
+        chart_type = self.composer._determine_chart_type(
+            query_plan,
+            query_result_large["data"]["rows"],
+            "커스텀 데이터 그래프"
+        )
+        assert chart_type == "line", "6개 이상 데이터는 line"
+
+
+class TestChartTypeSnakeCaseFields:
+    """
+    snake_case 필드명과 SQL 파생 필드 테스트
+    실제 SQL 결과에서 groupBy는 snake_case로 올 수 있음
+    """
+
+    def setup_method(self):
+        self.composer = RenderComposerService()
+
+    def test_snake_case_merchant_id_returns_bar(self):
+        """
+        snake_case merchant_id도 카테고리로 인식
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"merchant_id": "mer_001", "total_amount": 5000000},
+                    {"merchant_id": "mer_002", "total_amount": 4000000},
+                    {"merchant_id": "mer_003", "total_amount": 3000000}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["merchant_id"],
+            "aggregations": [{"function": "sum", "field": "amount", "alias": "total_amount"}]
+        }
+
+        chart_type = self.composer._determine_chart_type(
+            query_plan,
+            query_result["data"]["rows"],
+            "가맹점별 매출 그래프"
+        )
+        assert chart_type == "bar", "snake_case merchant_id도 카테고리로 bar"
+
+    def test_month_field_returns_line(self):
+        """
+        DATE_TRUNC('month', ...) 결과인 month 필드는 시계열로 인식
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"month": "2024-01", "total_amount": 10000000},
+                    {"month": "2024-02", "total_amount": 12000000},
+                    {"month": "2024-03", "total_amount": 11000000}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["month"],
+            "aggregations": [{"function": "sum", "field": "amount", "alias": "total_amount"}]
+        }
+
+        chart_type = self.composer._determine_chart_type(
+            query_plan,
+            query_result["data"]["rows"],
+            "월별 매출 추이 그래프"
+        )
+        assert chart_type == "line", "month 필드는 시계열로 line"
+
+    def test_merchant_and_month_with_trend_returns_line(self):
+        """
+        가맹점별 월별 추이 - 카테고리 + 시계열 + '추이' 키워드
+        시계열 필드가 있고 '추이' 키워드가 있으면 line
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"merchant_id": "mer_001", "month": "2024-01", "total_amount": 5000000},
+                    {"merchant_id": "mer_001", "month": "2024-02", "total_amount": 5500000},
+                    {"merchant_id": "mer_002", "month": "2024-01", "total_amount": 4000000},
+                    {"merchant_id": "mer_002", "month": "2024-02", "total_amount": 4200000}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["merchant_id", "month"],
+            "aggregations": [{"function": "sum", "field": "amount", "alias": "total_amount"}]
+        }
+
+        # "추이" 키워드 + 시계열 필드(month)가 있으면 line
+        chart_type = self.composer._determine_chart_type(
+            query_plan,
+            query_result["data"]["rows"],
+            "최근 3개월, 가맹점별 월별로 추이를 그래프로 보여줘"
+        )
+        assert chart_type == "line", "카테고리+시계열 + '추이' 키워드 = line"
+
+    def test_merchant_and_month_without_trend_returns_bar(self):
+        """
+        카테고리 + 시계열 + 명시적 키워드 없음
+        기본값은 bar (grouped bar chart)
+        NOTE: "월별"은 line 키워드이므로 테스트에서 제외
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"merchant_id": "mer_001", "month": "2024-01", "total_amount": 5000000},
+                    {"merchant_id": "mer_001", "month": "2024-02", "total_amount": 5500000},
+                    {"merchant_id": "mer_002", "month": "2024-01", "total_amount": 4000000},
+                    {"merchant_id": "mer_002", "month": "2024-02", "total_amount": 4200000}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["merchant_id", "month"],
+            "aggregations": [{"function": "sum", "field": "amount", "alias": "total_amount"}]
+        }
+
+        # 명시적 line/bar 키워드 없이 조회 (단, "월별" 등의 암시적 키워드도 제외)
+        chart_type = self.composer._determine_chart_type(
+            query_plan,
+            query_result["data"]["rows"],
+            "가맹점, 월 기준 매출 현황 그래프"
+        )
+        assert chart_type == "bar", "카테고리+시계열 기본값 = bar (grouped bar)"
+
+    def test_week_field_returns_line(self):
+        """
+        DATE_TRUNC('week', ...) 결과인 week 필드도 시계열로 인식
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"week": "2024-W01", "count": 100},
+                    {"week": "2024-W02", "count": 120},
+                    {"week": "2024-W03", "count": 110}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["week"],
+            "aggregations": [{"function": "count", "field": "*", "alias": "count"}]
+        }
+
+        chart_type = self.composer._determine_chart_type(
+            query_plan,
+            query_result["data"]["rows"],
+            "주간 결제 추이 그래프"
+        )
+        assert chart_type == "line", "week 필드는 시계열로 line"

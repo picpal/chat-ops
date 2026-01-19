@@ -12,6 +12,8 @@ from app.constants.render_keywords import (
     TABLE_KEYWORDS,
     TEXT_KEYWORDS,
     CHART_TYPE_KEYWORDS,
+    DATE_FIELDS,
+    CATEGORY_FIELDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -349,62 +351,85 @@ class RenderComposerService:
         """
         쿼리 결과와 사용자 의도에 따라 최적 차트 타입 결정
 
-        CHART_TYPE_KEYWORDS 상수를 사용하여 키워드 매칭
-        우선순위: 사용자 명시 키워드 > 데이터 구조 기반 추론
+        핵심 원칙: 필드 타입 우선 → 키워드는 세부 조정
+        - 카테고리 필드만 (merchantId, status 등) → bar 기본
+        - 시계열 필드만 (month, createdAt 등) → line 기본
+        - 카테고리 + 시계열 둘 다 → 키워드로 결정, 기본 bar
+
+        우선순위:
+        1. groupBy 필드 타입 분류 (카테고리 vs 시계열)
+        2. 필드 타입에 따른 기본 차트 결정
+        3. 사용자 키워드로 세부 조정 (pie 오버라이드, 명시적 타입 요청)
         """
         group_by = query_plan.get("groupBy", [])
-        time_range = query_plan.get("timeRange")
         message_lower = user_message.lower()
 
-        # 1순위: 사용자가 명시한 차트 타입 키워드 체크
-        # pie chart 키워드
-        if any(kw in message_lower for kw in CHART_TYPE_KEYWORDS.get("pie", [])):
+        # 1단계: groupBy 필드 타입 분류
+        date_fields_in_group = [f for f in group_by if f in DATE_FIELDS]
+        category_fields_in_group = [f for f in group_by if f in CATEGORY_FIELDS]
+        is_date_group = len(date_fields_in_group) > 0
+        is_category_group = len(category_fields_in_group) > 0
+
+        logger.info(
+            f"[ChartType] groupBy={group_by}, "
+            f"dateFields={date_fields_in_group}, categoryFields={category_fields_in_group}, "
+            f"is_date={is_date_group}, is_category={is_category_group}"
+        )
+
+        # 2단계: 필드 타입 기반 기본값 결정
+        # - 카테고리 필드만 → bar
+        # - 시계열 필드만 → line
+        # - 둘 다 있음 → bar (grouped bar chart가 더 읽기 쉬움)
+        # - 둘 다 없음 → 데이터 포인트 수 기반
+        if is_category_group and is_date_group:
+            # 카테고리 + 시계열: grouped bar chart 기본 (line 키워드로 오버라이드 가능)
+            base_type = "bar"
+        elif is_category_group:
+            base_type = "bar"
+        elif is_date_group:
+            base_type = "line"
+        else:
+            # 알 수 없는 필드: 데이터 포인트 수 기반 (5개 이하 bar, 초과 line)
+            base_type = "bar" if len(rows) <= 5 else "line"
+
+        logger.info(f"[ChartType] base_type={base_type} (before keyword adjustment)")
+
+        # 3단계: 사용자 키워드로 세부 조정
+
+        # 3-1: pie 오버라이드 - 카테고리 + 비율 키워드
+        pie_keywords = CHART_TYPE_KEYWORDS.get("pie", [])
+        if base_type == "bar" and any(kw in message_lower for kw in pie_keywords):
+            logger.info("[ChartType] final=pie (pie keyword matched)")
             return "pie"
 
-        # line chart 키워드
-        if any(kw in message_lower for kw in CHART_TYPE_KEYWORDS.get("line", [])):
-            return "line"
-
-        # bar chart 키워드
-        if any(kw in message_lower for kw in CHART_TYPE_KEYWORDS.get("bar", [])):
+        # 3-2: 명시적 bar 키워드 체크 (시계열도 bar로 오버라이드 가능)
+        bar_keywords = CHART_TYPE_KEYWORDS.get("bar", [])
+        if any(kw in message_lower for kw in bar_keywords):
+            logger.info("[ChartType] final=bar (explicit bar keyword)")
             return "bar"
 
-        # area chart 키워드
-        if any(kw in message_lower for kw in CHART_TYPE_KEYWORDS.get("area", [])):
+        # 3-3: 명시적 line 키워드 - 시계열 필드가 있을 때만 적용
+        # 카테고리 + 시계열의 경우, "추이/월별" 키워드가 있으면 line으로 변경
+        line_keywords = CHART_TYPE_KEYWORDS.get("line", [])
+        if any(kw in message_lower for kw in line_keywords):
+            if is_date_group:
+                logger.info("[ChartType] final=line (line keyword + date field)")
+                return "line"
+            # 시계열 필드 없으면 base_type 유지 (bar)
+            logger.info(f"[ChartType] line keyword ignored (no date field), keeping {base_type}")
+
+        # 3-4: area 키워드 체크
+        area_keywords = CHART_TYPE_KEYWORDS.get("area", [])
+        if any(kw in message_lower for kw in area_keywords):
+            logger.info("[ChartType] final=area (area keyword)")
             return "area"
 
-        # 2순위: 데이터 구조 기반 추론
-        # 시계열 데이터 (날짜 기준 그룹화) -> line chart
-        date_fields = ["approvedAt", "createdAt", "settlementDate", "timestamp", "orderDate", "updatedAt"]
-        if group_by and any(field in group_by for field in date_fields):
-            return "line"
-
-        # timeRange가 있고 추이/추세 키워드 -> line chart
-        if time_range and any(kw in message_lower for kw in ["추이", "추세", "변화", "trend", "일별", "월별", "주별"]):
-            return "line"
-
-        # 상태별, 결제수단별 등 카테고리 그룹화 -> bar chart
-        category_fields = ["status", "method", "merchantId", "type", "level", "sourceType"]
-        if group_by and any(field in group_by for field in category_fields):
-            # 상태별 비율 관련 질문이면 pie
-            if "status" in group_by and any(kw in message_lower for kw in ["현황", "통계"]):
-                return "pie"
-            return "bar"
-
-        # 3순위: 데이터 포인트 수 기반
-        # 데이터 포인트가 적으면 (5개 이하) -> bar, 많으면 -> line
-        if len(rows) <= 5:
-            return "bar"
-
-        return "line"  # 기본값
+        logger.info(f"[ChartType] final={base_type} (default)")
+        return base_type
 
     def _is_date_field(self, field: str) -> bool:
-        """날짜 필드 여부 확인"""
-        date_fields = [
-            "approvedAt", "createdAt", "updatedAt", "settlementDate",
-            "timestamp", "periodStart", "periodEnd", "orderDate"
-        ]
-        return field in date_fields
+        """날짜 필드 여부 확인 (DATE_FIELDS 상수 사용)"""
+        return field in DATE_FIELDS
 
     def _get_axis_label(self, field: str) -> str:
         """필드명을 사용자 친화적 레이블로 변환"""

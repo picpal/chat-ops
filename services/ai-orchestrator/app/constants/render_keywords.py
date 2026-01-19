@@ -139,3 +139,54 @@ TIME_FIELD_KEYWORDS: List[str] = [
     "월",
     "연도",
 ]
+
+# ============================================
+# 필드 타입 분류 (차트 타입 자동 결정용)
+# ============================================
+
+# 시계열 필드 - line chart 기본
+# camelCase, snake_case, SQL 파생 필드 모두 포함
+DATE_FIELDS: List[str] = [
+    # camelCase (QueryPlan 표준)
+    "approvedAt",
+    "createdAt",
+    "updatedAt",
+    "settlementDate",
+    "timestamp",
+    "periodStart",
+    "periodEnd",
+    "orderDate",
+    # snake_case (SQL 결과)
+    "approved_at",
+    "created_at",
+    "updated_at",
+    "settlement_date",
+    "period_start",
+    "period_end",
+    "order_date",
+    # SQL 파생 필드 (DATE_TRUNC, EXTRACT 결과)
+    "month",
+    "date",
+    "day",
+    "week",
+    "year",
+    "quarter",
+]
+
+# 카테고리 필드 - bar chart 기본
+# camelCase, snake_case 모두 포함
+CATEGORY_FIELDS: List[str] = [
+    # camelCase (QueryPlan 표준)
+    "status",
+    "method",
+    "merchantId",
+    "type",
+    "level",
+    "sourceType",
+    "cardCompany",
+    "reason",
+    # snake_case (SQL 결과)
+    "merchant_id",
+    "source_type",
+    "card_company",
+]
