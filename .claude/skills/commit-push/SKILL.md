@@ -1,9 +1,8 @@
 ---
-name: commit-push
+name: cp
 description: |
-  Git commit and push in one command for ChatOps project. Trigger with "/commit-push" or "커밋 푸시".
-  Automatically: (1) Check status, (2) Stage all changes, (3) Commit with Conventional Commits format, (4) Push to origin.
-  Use when user wants to save and upload current work to git repository.
+  Git commit & push in one command. Trigger: "/cp", "/save", "cp", "save", "저장".
+  Auto: status → stage → commit → push. Use when saving work to git.
 ---
 
 # Git Commit & Push (Single Command)
