@@ -21,6 +21,12 @@ import io
 import math
 from datetime import datetime
 
+from app.constants.render_keywords import (
+    CHART_KEYWORDS,
+    TABLE_KEYWORDS,
+    TIME_FIELD_KEYWORDS,
+)
+
 
 # ============================================
 # 참조 표현 감지 (연속 대화 WHERE 조건 병합용)
@@ -1665,17 +1671,18 @@ def build_sql_history(conversation_history: Optional[List[ChatMessageItem]]) -> 
 # ============================================
 # 차트 렌더링 감지 및 구성 (TC-001)
 # ============================================
-
-# 차트 관련 키워드
-CHART_KEYWORDS = ["그래프로", "차트로", "시각화로", "그래프 형태", "차트 형태", "그래프로 보여", "차트로 보여"]
-TABLE_KEYWORDS = ["표로", "테이블로", "목록으로", "리스트로"]
-
-# 시계열 필드 감지용 키워드
-TIME_FIELD_KEYWORDS = ["date", "time", "day", "month", "year", "week", "quarter", "period", "날짜", "일자", "월", "연도"]
+# NOTE: CHART_KEYWORDS, TABLE_KEYWORDS, TIME_FIELD_KEYWORDS는
+#       app.constants.render_keywords에서 import됨
 
 
 def _detect_render_type_from_message(message: str) -> Optional[str]:
     """사용자 메시지에서 렌더링 타입 감지
+
+    상수 파일(render_keywords.py)에서 키워드를 import하여 사용
+
+    우선순위:
+    1. 테이블 키워드 ("그래프 말고 표로" 같은 부정 표현 처리)
+    2. 차트 키워드 (단독 키워드 "그래프", "차트" 포함)
 
     Args:
         message: 사용자 질문
@@ -1685,13 +1692,13 @@ def _detect_render_type_from_message(message: str) -> Optional[str]:
     """
     msg = message.lower()
 
-    # 차트 키워드 감지
-    if any(kw in msg for kw in CHART_KEYWORDS):
-        return "chart"
-
-    # 테이블 키워드 감지
+    # 1순위: 테이블 키워드 감지 (부정 표현 처리를 위해 먼저 체크)
     if any(kw in msg for kw in TABLE_KEYWORDS):
         return "table"
+
+    # 2순위: 차트 키워드 감지 (단독 키워드 포함)
+    if any(kw in msg for kw in CHART_KEYWORDS):
+        return "chart"
 
     return None
 

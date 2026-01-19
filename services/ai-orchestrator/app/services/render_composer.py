@@ -7,6 +7,13 @@ import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
+from app.constants.render_keywords import (
+    CHART_KEYWORDS,
+    TABLE_KEYWORDS,
+    TEXT_KEYWORDS,
+    CHART_TYPE_KEYWORDS,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -152,22 +159,31 @@ class RenderComposerService:
 
     def _detect_render_type_from_message(self, message: str) -> Optional[str]:
         """
-        사용자 메시지에서 명시적 렌더링 타입 요청 감지 (하드코딩)
+        사용자 메시지에서 명시적 렌더링 타입 요청 감지
 
         LLM 판단보다 확실한 키워드 매칭으로 100% 정확도 보장
+        상수 파일(render_keywords.py)에서 키워드를 import하여 사용
+
+        우선순위:
+        1. 테이블 키워드 ("그래프 말고 표로" 같은 부정 표현 처리)
+        2. 차트 키워드 (단독 키워드 "그래프", "차트" 포함)
+        3. 텍스트 키워드
+
+        NOTE: 암시적 차트 키워드(비율, 추이 등)는 기본적으로 테이블로 표시
+              차트는 명시적으로 "그래프", "차트" 키워드가 있을 때만 사용
         """
         msg = message.lower()
 
-        # 표/테이블 요청
-        if any(kw in msg for kw in ["표로", "테이블로", "목록으로", "리스트로", "표 형태", "테이블 형태"]):
+        # 1순위: 표/테이블 요청 (부정 표현 "그래프 말고 표로" 처리를 위해 먼저 체크)
+        if any(kw in msg for kw in TABLE_KEYWORDS):
             return "table"
 
-        # 차트/그래프 요청
-        if any(kw in msg for kw in ["그래프로", "차트로", "시각화로", "그래프 형태", "차트 형태"]):
+        # 2순위: 차트/그래프 요청 (단독 키워드 포함)
+        if any(kw in msg for kw in CHART_KEYWORDS):
             return "chart"
 
-        # 텍스트 요청
-        if any(kw in msg for kw in ["텍스트로", "글로", "요약으로"]):
+        # 3순위: 텍스트 요청
+        if any(kw in msg for kw in TEXT_KEYWORDS):
             return "text"
 
         return None
@@ -299,19 +315,25 @@ class RenderComposerService:
         query_plan: Dict[str, Any],
         user_message: str
     ) -> Dict[str, Any]:
-        """집계 결과를 테이블, 차트 또는 텍스트 형태로 변환"""
+        """
+        집계 결과를 테이블, 차트 또는 텍스트 형태로 변환
+
+        원칙: 명시적 차트 키워드("그래프", "차트", "시각화")가 있을 때만 차트 사용
+              "비율", "추이" 등의 암시적 키워드는 테이블이 기본
+        """
         data = query_result.get("data", {})
         rows = data.get("rows", [])
         aggregations = data.get("aggregations", {})
         group_by = query_plan.get("groupBy", [])
         message_lower = user_message.lower()
 
-        # 차트 관련 키워드가 있으면 차트로 렌더링
-        chart_keywords = ["그래프", "차트", "시각화", "비율", "점유율", "분포", "추이", "추세"]
-        if any(kw in message_lower for kw in chart_keywords):
+        # 명시적 차트 키워드가 있을 때만 차트로 렌더링
+        # NOTE: "비율", "추이" 등은 암시적 키워드이므로 제외 (테이블이 기본)
+        explicit_chart_keywords = ["그래프", "차트", "시각화"]
+        if any(kw in message_lower for kw in explicit_chart_keywords):
             return self._compose_chart_spec(query_result, query_plan, user_message)
 
-        # 그룹화가 있고 여러 행이 있으면 테이블 (기본값 변경)
+        # 그룹화가 있고 여러 행이 있으면 테이블 (기본값)
         if group_by and len(rows) > 1:
             return self._compose_table_spec(query_result, query_plan, user_message)
         # 단일 집계 결과는 텍스트
@@ -324,25 +346,44 @@ class RenderComposerService:
         rows: List[Dict[str, Any]],
         user_message: str
     ) -> str:
-        """쿼리 결과와 사용자 의도에 따라 최적 차트 타입 결정"""
+        """
+        쿼리 결과와 사용자 의도에 따라 최적 차트 타입 결정
+
+        CHART_TYPE_KEYWORDS 상수를 사용하여 키워드 매칭
+        우선순위: 사용자 명시 키워드 > 데이터 구조 기반 추론
+        """
         group_by = query_plan.get("groupBy", [])
         time_range = query_plan.get("timeRange")
         message_lower = user_message.lower()
 
-        # 비율/점유율 관련 키워드 → pie chart
-        if any(kw in message_lower for kw in ["비율", "점유율", "분포", "비중", "퍼센트", "%"]):
+        # 1순위: 사용자가 명시한 차트 타입 키워드 체크
+        # pie chart 키워드
+        if any(kw in message_lower for kw in CHART_TYPE_KEYWORDS.get("pie", [])):
             return "pie"
 
-        # 시계열 데이터 (날짜 기준 그룹화) → line chart
+        # line chart 키워드
+        if any(kw in message_lower for kw in CHART_TYPE_KEYWORDS.get("line", [])):
+            return "line"
+
+        # bar chart 키워드
+        if any(kw in message_lower for kw in CHART_TYPE_KEYWORDS.get("bar", [])):
+            return "bar"
+
+        # area chart 키워드
+        if any(kw in message_lower for kw in CHART_TYPE_KEYWORDS.get("area", [])):
+            return "area"
+
+        # 2순위: 데이터 구조 기반 추론
+        # 시계열 데이터 (날짜 기준 그룹화) -> line chart
         date_fields = ["approvedAt", "createdAt", "settlementDate", "timestamp", "orderDate", "updatedAt"]
         if group_by and any(field in group_by for field in date_fields):
             return "line"
 
-        # timeRange가 있고 추이/추세 키워드 → line chart
+        # timeRange가 있고 추이/추세 키워드 -> line chart
         if time_range and any(kw in message_lower for kw in ["추이", "추세", "변화", "trend", "일별", "월별", "주별"]):
             return "line"
 
-        # 상태별, 결제수단별 등 카테고리 그룹화 → bar chart
+        # 상태별, 결제수단별 등 카테고리 그룹화 -> bar chart
         category_fields = ["status", "method", "merchantId", "type", "level", "sourceType"]
         if group_by and any(field in group_by for field in category_fields):
             # 상태별 비율 관련 질문이면 pie
@@ -350,7 +391,8 @@ class RenderComposerService:
                 return "pie"
             return "bar"
 
-        # 데이터 포인트가 적으면 (5개 이하) → bar, 많으면 → line
+        # 3순위: 데이터 포인트 수 기반
+        # 데이터 포인트가 적으면 (5개 이하) -> bar, 많으면 -> line
         if len(rows) <= 5:
             return "bar"
 

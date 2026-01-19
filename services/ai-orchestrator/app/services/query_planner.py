@@ -1224,11 +1224,25 @@ clarification이 필요하면 "YES", 필요 없으면 "NO"만 응답하세요.
 
 ### 키워드 → preferredRenderType 매핑
 
+#### 1. 명시적 키워드 (조사 포함)
 | 사용자 표현 | preferredRenderType |
 |------------|---------------------|
 | "표로", "테이블로", "목록으로", "리스트로" | "table" |
 | "그래프로", "차트로", "그림으로", "시각화로" | "chart" |
 | "텍스트로", "글로", "요약으로" | "text" |
+
+#### 2. 단독 키워드 (조사 없이도 인식) - 중요!
+| 사용자 표현 | preferredRenderType |
+|------------|---------------------|
+| "그래프", "차트", "시각화" (단독 사용) | "chart" |
+| "표", "테이블", "목록", "리스트" (단독 사용) | "table" |
+
+#### 3. 암시적 차트 요청 (데이터 특성 기반) - 중요!
+| 사용자 표현 | preferredRenderType | 추천 차트 타입 |
+|------------|---------------------|---------------|
+| "비율", "점유율", "분포", "비중" | "chart" | pie |
+| "추이", "추세", "변화", "트렌드" | "chart" | line |
+| "일별", "월별", "주별" + 집계 | "chart" | line |
 
 ### 예시
 
@@ -1236,16 +1250,39 @@ clarification이 필요하면 "YES", 필요 없으면 "NO"만 응답하세요.
 - 입력: "최근 3개월 거래를 가맹점별로 그룹화해서 **표로** 보여줘"
 - 결과: operation=aggregate, groupBy=["merchantId"], **preferredRenderType="table"**
 
-**예시 2: 차트로 요청**
+**예시 2: 차트로 요청 (조사 포함)**
 - 입력: "결제 현황을 **그래프로** 보여줘"
 - 결과: operation=aggregate, **preferredRenderType="chart"**
 
-**예시 3: 명시 없음**
+**예시 3: 단독 키워드 차트 요청 (NEW!)**
+- 입력: "상태별 결제 **그래프** 보여줘"
+- 결과: operation=aggregate, groupBy=["status"], **preferredRenderType="chart"**
+
+**예시 4: 단독 키워드 차트 요청 (NEW!)**
+- 입력: "**차트** 만들어줘"
+- 결과: operation=aggregate, **preferredRenderType="chart"**
+
+**예시 5: 암시적 차트 요청 - 비율 (NEW!)**
+- 입력: "상태별 결제 **비율** 알려줘"
+- 결과: operation=aggregate, groupBy=["status"], **preferredRenderType="chart"** (pie 차트 추천)
+
+**예시 6: 암시적 차트 요청 - 추이 (NEW!)**
+- 입력: "최근 한 달 결제 **추이** 보여줘"
+- 결과: operation=aggregate, groupBy=["approvedAt"], **preferredRenderType="chart"** (line 차트 추천)
+
+**예시 7: 명시 없음**
 - 입력: "최근 결제 내역 조회해줘"
 - 결과: operation=list, **preferredRenderType 생략** (시스템이 자동 결정)
 
+**예시 8: 부정 표현 (표 우선)**
+- 입력: "**그래프 말고 표로** 보여줘"
+- 결과: **preferredRenderType="table"** (부정 표현 시 표 우선)
+
 ### 중요 규칙
 - 사용자가 "표로"라고 명시하면 groupBy가 있더라도 **반드시 preferredRenderType="table"** 설정
+- **"그래프", "차트" 단독 키워드도 차트 요청으로 인식** (조사 없어도 됨)
+- **"비율", "추이" 같은 암시적 표현도 차트가 적절하면 preferredRenderType="chart" 설정**
+- "그래프 말고", "차트 대신" 같은 부정 표현은 **표(table)로 처리**
 - 사용자가 렌더링 타입을 명시하지 않으면 preferredRenderType 필드를 생략 (시스템이 자동 결정)
 - preferredRenderType은 operation과 독립적 (aggregate 작업도 표로 표시 가능)
 
