@@ -37,6 +37,10 @@ const COLORS = [
   '#ef4444', // red
   '#8b5cf6', // violet
   '#06b6d4', // cyan
+  '#3b82f6', // blue
+  '#22c55e', // green
+  '#ec4899', // pink
+  '#f97316', // orange
 ]
 
 const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
@@ -332,24 +336,78 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
 
       case 'pie':
         const pieDataKey = series?.[0]?.dataKey || yAxis?.dataKey || 'value'
+        const pieNameKey = xAxisDataKey
+
+        // Debug logging
+        console.log('=== Pie Chart Debug ===')
+        console.log('chartData:', chartData)
+        console.log('pieDataKey:', pieDataKey)
+        console.log('pieNameKey:', pieNameKey)
+        console.log('series:', series)
+        console.log('yAxis:', yAxis)
+
+        const RADIAN = Math.PI / 180
+        const renderCustomizedLabel = ({
+          cx,
+          cy,
+          midAngle,
+          innerRadius,
+          outerRadius,
+          percent,
+        }: {
+          cx: number
+          cy: number
+          midAngle: number
+          innerRadius: number
+          outerRadius: number
+          percent: number
+        }) => {
+          const radius = innerRadius + (outerRadius - innerRadius) * 0.5
+          const x = cx + radius * Math.cos(-midAngle * RADIAN)
+          const y = cy + radius * Math.sin(-midAngle * RADIAN)
+
+          if (percent < 0.05) return null // Hide label for slices less than 5%
+
+          return (
+            <text
+              x={x}
+              y={y}
+              fill="white"
+              textAnchor="middle"
+              dominantBaseline="central"
+              fontSize={12}
+              fontWeight={600}
+            >
+              {`${(percent * 100).toFixed(0)}%`}
+            </text>
+          )
+        }
+
         return (
           <PieChart>
             <Pie
               data={chartData}
               dataKey={pieDataKey}
-              nameKey={xAxisDataKey}
+              nameKey={pieNameKey}
               cx="50%"
               cy="50%"
               outerRadius={100}
-              label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+              innerRadius={50}
+              label={renderCustomizedLabel}
               labelLine={false}
+              paddingAngle={2}
             >
               {chartData.map((_, index) => (
                 <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
               ))}
             </Pie>
             {showTooltip && <Tooltip {...tooltipStyle} />}
-            {showLegend && <Legend />}
+            <Legend
+              layout="horizontal"
+              verticalAlign="bottom"
+              align="center"
+              wrapperStyle={{ paddingTop: 20 }}
+            />
           </PieChart>
         )
 
