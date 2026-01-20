@@ -32,7 +32,7 @@ class TestParseLLMResponse:
   "chartReason": "시계열 데이터 + 추이 키워드"
 }
 ```'''
-        sql, chart_type, chart_reason = text_to_sql_service._parse_llm_response(response)
+        sql, chart_type, chart_reason, _ = text_to_sql_service._parse_llm_response(response)
 
         assert sql == "SELECT * FROM payments;"
         assert chart_type == "line"
@@ -42,7 +42,7 @@ class TestParseLLMResponse:
         """직접 JSON 형식 파싱"""
         response = '''{"sql": "SELECT COUNT(*) FROM refunds;", "chartType": "bar", "chartReason": "카테고리 비교"}'''
 
-        sql, chart_type, chart_reason = text_to_sql_service._parse_llm_response(response)
+        sql, chart_type, chart_reason, _ = text_to_sql_service._parse_llm_response(response)
 
         assert sql == "SELECT COUNT(*) FROM refunds;"
         assert chart_type == "bar"
@@ -57,7 +57,7 @@ class TestParseLLMResponse:
   "chartReason": "차트 요청 키워드 없음"
 }
 ```'''
-        sql, chart_type, chart_reason = text_to_sql_service._parse_llm_response(response)
+        sql, chart_type, chart_reason, _ = text_to_sql_service._parse_llm_response(response)
 
         assert sql == "SELECT * FROM merchants;"
         assert chart_type == "none"
@@ -68,7 +68,7 @@ class TestParseLLMResponse:
         response = '''```sql
 SELECT * FROM payments WHERE status = 'DONE';
 ```'''
-        sql, chart_type, chart_reason = text_to_sql_service._parse_llm_response(response)
+        sql, chart_type, chart_reason, _ = text_to_sql_service._parse_llm_response(response)
 
         assert "SELECT * FROM payments" in sql
         assert chart_type is None
@@ -78,7 +78,7 @@ SELECT * FROM payments WHERE status = 'DONE';
         """순수 SQL 문자열 (폴백)"""
         response = "SELECT merchant_id, SUM(amount) FROM payments GROUP BY merchant_id;"
 
-        sql, chart_type, chart_reason = text_to_sql_service._parse_llm_response(response)
+        sql, chart_type, chart_reason, _ = text_to_sql_service._parse_llm_response(response)
 
         assert sql == "SELECT merchant_id, SUM(amount) FROM payments GROUP BY merchant_id;"
         assert chart_type is None
@@ -93,7 +93,7 @@ SELECT * FROM payments WHERE status = 'DONE';
   "chartReason": "비율/분포 키워드"
 }
 ```'''
-        sql, chart_type, chart_reason = text_to_sql_service._parse_llm_response(response)
+        sql, chart_type, chart_reason, _ = text_to_sql_service._parse_llm_response(response)
 
         assert chart_type == "pie"
 
@@ -103,7 +103,7 @@ class TestDetectChartTypeFallback:
 
     def test_line_chart_with_time_column_and_keyword(self):
         """시계열 컬럼 + line 키워드 → line"""
-        from app.api.v1.chat import _detect_chart_type
+        from app.services.sql_render_composer import _detect_chart_type
 
         data = [
             {"month": "2024-01", "count": 10},
@@ -117,7 +117,7 @@ class TestDetectChartTypeFallback:
 
     def test_line_chart_with_time_column_only(self):
         """시계열 컬럼 + 2행 이상 → line (키워드 없어도)"""
-        from app.api.v1.chat import _detect_chart_type
+        from app.services.sql_render_composer import _detect_chart_type
 
         data = [
             {"created_at": "2024-01-01", "amount": 1000},
@@ -131,7 +131,7 @@ class TestDetectChartTypeFallback:
 
     def test_pie_chart_with_keyword(self):
         """pie 키워드 + 적은 데이터 → pie"""
-        from app.api.v1.chat import _detect_chart_type
+        from app.services.sql_render_composer import _detect_chart_type
 
         data = [
             {"status": "DONE", "count": 100},
@@ -145,7 +145,7 @@ class TestDetectChartTypeFallback:
 
     def test_bar_chart_default(self):
         """기본 차트 타입 → bar"""
-        from app.api.v1.chat import _detect_chart_type
+        from app.services.sql_render_composer import _detect_chart_type
 
         data = [
             {"merchant_id": "mer_001", "total": 5000000},
@@ -163,7 +163,7 @@ class TestDetectChartTypeFallback:
 
     def test_line_keyword_prevents_pie(self):
         """line 키워드가 있으면 적은 데이터여도 pie 안됨"""
-        from app.api.v1.chat import _detect_chart_type
+        from app.services.sql_render_composer import _detect_chart_type
 
         data = [
             {"month": "2024-10", "count": 10},
@@ -177,7 +177,7 @@ class TestDetectChartTypeFallback:
 
     def test_empty_data(self):
         """빈 데이터 → bar (기본값)"""
-        from app.api.v1.chat import _detect_chart_type
+        from app.services.sql_render_composer import _detect_chart_type
 
         chart_type = _detect_chart_type([], [], "그래프로 보여줘")
         assert chart_type == "bar"
@@ -188,7 +188,7 @@ class TestComposeChartRenderSpec:
 
     def test_llm_chart_type_priority(self):
         """LLM 차트 타입이 우선됨"""
-        from app.api.v1.chat import _compose_chart_render_spec
+        from app.services.sql_render_composer import _compose_chart_render_spec
 
         result = {
             "data": [
@@ -207,7 +207,7 @@ class TestComposeChartRenderSpec:
 
     def test_fallback_to_rule_based(self):
         """LLM 차트 타입 없으면 규칙 기반"""
-        from app.api.v1.chat import _compose_chart_render_spec
+        from app.services.sql_render_composer import _compose_chart_render_spec
 
         result = {
             "data": [
@@ -227,7 +227,7 @@ class TestComposeChartRenderSpec:
 
     def test_invalid_llm_chart_type_fallback(self):
         """LLM 차트 타입이 유효하지 않으면 폴백"""
-        from app.api.v1.chat import _compose_chart_render_spec
+        from app.services.sql_render_composer import _compose_chart_render_spec
 
         result = {
             "data": [

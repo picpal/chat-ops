@@ -13,7 +13,7 @@ import os
 # 프로젝트 루트 경로 추가
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from app.api.v1.chat import _detect_trend, _generate_insight
+from app.services.sql_render_composer import _detect_trend, _generate_insight
 
 
 class TestDetectTrend:
