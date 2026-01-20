@@ -19,8 +19,41 @@ import {
 } from 'recharts'
 import { useModal } from '@/hooks'
 import { Icon } from '@/components/common'
-import { ChartRenderSpec, ChartSeries } from '@/types/renderSpec'
-import { formatNumber } from '@/utils'
+import { ChartRenderSpec, ChartSeries, SummaryStatItem } from '@/types/renderSpec'
+import { formatNumber, formatCompactNumber } from '@/utils'
+
+// Summary Stats 값 포맷팅 헬퍼 함수
+const formatStatValue = (
+  value: string | number | null,
+  type: SummaryStatItem['type']
+): string => {
+  if (value === null || value === undefined) return '-'
+
+  // 문자열인 경우 그대로 반환 (이미 포맷팅된 값)
+  if (typeof value === 'string') {
+    return value
+  }
+
+  // 숫자 타입별 포맷팅
+  switch (type) {
+    case 'currency':
+      if (value >= 100000000) {
+        return `₩${(value / 100000000).toFixed(1)}억`
+      }
+      if (value >= 10000) {
+        return `₩${Math.round(value / 10000)}만`
+      }
+      return `₩${value.toLocaleString()}`
+    case 'percentage':
+      return `${value.toFixed(1)}%`
+    case 'number':
+      return value.toLocaleString()
+    case 'trend':
+    case 'text':
+    default:
+      return String(value)
+  }
+}
 
 // Default color palette matching design system
 const COLORS = [
@@ -30,6 +63,10 @@ const COLORS = [
   '#ef4444', // red
   '#8b5cf6', // violet
   '#06b6d4', // cyan
+  '#3b82f6', // blue
+  '#22c55e', // green
+  '#ec4899', // pink
+  '#f97316', // orange
 ]
 
 interface ChartModalData {
@@ -50,7 +87,31 @@ const ChartDetailModal: React.FC = () => {
   const modalData = data as ChartModalData | undefined
   const spec = modalData?.spec
   const chartData = modalData?.chartData || []
-  const stats = modalData?.stats
+
+  // Calculate stats from chartData directly (handle string values)
+  const stats = React.useMemo(() => {
+    if (chartData.length === 0 || !spec) return null
+
+    const chartConfig = spec.chart
+    const primaryYAxisKey = chartConfig.series?.[0]?.dataKey || chartConfig.yAxis?.dataKey || 'value'
+
+    const values = chartData
+      .map((d) => {
+        const val = d[primaryYAxisKey]
+        if (typeof val === 'string') return parseFloat(val)
+        if (typeof val === 'number') return val
+        return NaN
+      })
+      .filter((v) => !isNaN(v))
+
+    if (values.length === 0) return null
+
+    const total = values.reduce((sum, v) => sum + v, 0)
+    const max = Math.max(...values)
+    const avg = total / values.length
+
+    return { total, max, avg, count: chartData.length }
+  }, [chartData, spec])
 
   // ESC key handler
   React.useEffect(() => {
@@ -241,23 +302,77 @@ const ChartDetailModal: React.FC = () => {
 
       case 'pie':
         const pieDataKey = series?.[0]?.dataKey || yAxis?.dataKey || 'value'
+
+        // Convert string values to numbers for pie chart
+        const pieChartData = chartData.map((item) => ({
+          ...item,
+          [pieDataKey]: typeof item[pieDataKey] === 'string'
+            ? parseFloat(item[pieDataKey])
+            : item[pieDataKey],
+        }))
+
+        const RADIAN = Math.PI / 180
+        const renderCustomizedLabel = ({
+          cx,
+          cy,
+          midAngle,
+          innerRadius,
+          outerRadius,
+          percent,
+        }: {
+          cx: number
+          cy: number
+          midAngle: number
+          innerRadius: number
+          outerRadius: number
+          percent: number
+        }) => {
+          const radius = innerRadius + (outerRadius - innerRadius) * 0.5
+          const x = cx + radius * Math.cos(-midAngle * RADIAN)
+          const y = cy + radius * Math.sin(-midAngle * RADIAN)
+
+          if (percent < 0.05) return null
+
+          return (
+            <text
+              x={x}
+              y={y}
+              fill="white"
+              textAnchor="middle"
+              dominantBaseline="central"
+              fontSize={14}
+              fontWeight={600}
+            >
+              {`${(percent * 100).toFixed(0)}%`}
+            </text>
+          )
+        }
+
         return (
           <PieChart>
             <Pie
-              data={chartData}
+              data={pieChartData}
               dataKey={pieDataKey}
               nameKey={xAxisDataKey}
               cx="50%"
               cy="50%"
-              outerRadius={150}
-              label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+              outerRadius={140}
+              innerRadius={70}
+              label={renderCustomizedLabel}
+              labelLine={false}
+              paddingAngle={2}
             >
-              {chartData.map((_, index) => (
+              {pieChartData.map((_, index) => (
                 <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
               ))}
             </Pie>
             <Tooltip {...tooltipStyle} />
-            {showLegend && <Legend />}
+            <Legend
+              layout="horizontal"
+              verticalAlign="bottom"
+              align="center"
+              wrapperStyle={{ paddingTop: 20 }}
+            />
           </PieChart>
         )
 
@@ -414,36 +529,61 @@ const ChartDetailModal: React.FC = () => {
 
             {/* Stats Sidebar */}
             <div className="lg:col-span-1 space-y-6">
-              {/* Summary Stats Card */}
+              {/* Summary Stats Card - Dynamic rendering with backend summaryStats priority */}
               <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">
-                  Summary Stats
-                </h4>
-                {stats ? (
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                    Summary Stats
+                  </h4>
+                  {chartConfig.summaryStats?.source === 'llm' && (
+                    <span className="text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded font-medium">
+                      AI 분석
+                    </span>
+                  )}
+                </div>
+                {/* Backend summaryStats가 있으면 사용 */}
+                {chartConfig.summaryStats?.items?.length ? (
+                  <div className="space-y-4">
+                    {chartConfig.summaryStats.items.map((item: SummaryStatItem, index: number) => (
+                      <React.Fragment key={item.key}>
+                        <div className={item.highlight ? 'bg-blue-50/50 -mx-2 px-2 py-2 rounded-lg' : ''}>
+                          <div className="flex items-center gap-1.5 mb-1">
+                            {item.icon && (
+                              <Icon name={item.icon} size="xs" className="text-slate-400" />
+                            )}
+                            <p className="text-xs text-slate-500">{item.label}</p>
+                          </div>
+                          <p className={`font-bold text-slate-800 break-all ${item.highlight ? 'text-xl' : 'text-lg'}`}>
+                            {formatStatValue(item.value, item.type)}
+                          </p>
+                        </div>
+                        {index < chartConfig.summaryStats!.items.length - 1 && (
+                          <div className="h-px bg-slate-100 w-full" />
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </div>
+                ) : stats ? (
+                  /* 폴백: 기존 프론트엔드 계산 stats */
                   <div className="space-y-4">
                     <div>
                       <p className="text-xs text-slate-500 mb-1">Total</p>
-                      <p className="text-2xl font-bold text-slate-800">
-                        {formatNumber(stats.total)}
-                        <span className="text-sm font-medium text-emerald-500 ml-1">
-                          (+15%)
-                        </span>
+                      <p className="text-xl font-bold text-slate-800 break-all">
+                        {formatCompactNumber(stats.total)}
                       </p>
                     </div>
                     <div className="h-px bg-slate-100 w-full" />
                     <div>
                       <p className="text-xs text-slate-500 mb-1">Average</p>
-                      <div className="flex items-center gap-2">
-                        <span className="text-lg font-bold text-slate-800">
-                          {formatNumber(stats.avg, 1)}
-                        </span>
-                      </div>
+                      <p className="text-lg font-bold text-slate-800 break-all">
+                        {formatCompactNumber(stats.avg)}
+                      </p>
                     </div>
                     <div className="h-px bg-slate-100 w-full" />
                     <div>
                       <p className="text-xs text-slate-500 mb-1">Peak Value</p>
-                      <p className="text-lg font-bold text-slate-800">
-                        {formatNumber(stats.max)}
+                      <p className="text-lg font-bold text-slate-800 break-all">
+                        {formatCompactNumber(stats.max)}
                       </p>
                     </div>
                     <div className="h-px bg-slate-100 w-full" />

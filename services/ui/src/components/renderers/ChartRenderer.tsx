@@ -18,7 +18,7 @@ import {
   Cell,
   Label,
 } from 'recharts'
-import { ChartRenderSpec, ChartSeries } from '@/types/renderSpec'
+import { ChartRenderSpec, ChartSeries, SummaryStatItem } from '@/types/renderSpec'
 import { QueryResult } from '@/types/queryResult'
 import { Card, Button, Icon } from '@/components/common'
 import { useModal } from '@/hooks'
@@ -42,6 +42,46 @@ const COLORS = [
   '#ec4899', // pink
   '#f97316', // orange
 ]
+
+// Summary Stats 값 포맷팅 헬퍼 함수
+const formatStatValue = (
+  value: string | number | null,
+  type: SummaryStatItem['type']
+): string => {
+  if (value === null || value === undefined) return '-'
+
+  // 문자열인 경우 그대로 반환 (이미 포맷팅된 값)
+  if (typeof value === 'string') {
+    return value
+  }
+
+  // 숫자 타입별 포맷팅
+  switch (type) {
+    case 'currency':
+      // 억 단위
+      if (value >= 100000000) {
+        return `₩${(value / 100000000).toFixed(1)}억`
+      }
+      // 만 단위
+      if (value >= 10000) {
+        return `₩${Math.round(value / 10000)}만`
+      }
+      return `₩${value.toLocaleString()}`
+
+    case 'percentage':
+      return `${value.toFixed(1)}%`
+
+    case 'number':
+      return value.toLocaleString()
+
+    case 'trend':
+      return String(value)
+
+    case 'text':
+    default:
+      return String(value)
+  }
+}
 
 const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
   const { open: openModal } = useModal()
@@ -75,7 +115,16 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
   const stats = useMemo(() => {
     if (chartData.length === 0) return null
 
-    const values = chartData.map((d) => d[primaryYAxisKey]).filter((v) => typeof v === 'number')
+    const values = chartData
+      .map((d) => {
+        const val = d[primaryYAxisKey]
+        // Convert string to number if needed
+        if (typeof val === 'string') return parseFloat(val)
+        if (typeof val === 'number') return val
+        return NaN
+      })
+      .filter((v) => !isNaN(v))
+
     if (values.length === 0) return null
 
     const total = values.reduce((sum, v) => sum + v, 0)
@@ -338,13 +387,13 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
         const pieDataKey = series?.[0]?.dataKey || yAxis?.dataKey || 'value'
         const pieNameKey = xAxisDataKey
 
-        // Debug logging
-        console.log('=== Pie Chart Debug ===')
-        console.log('chartData:', chartData)
-        console.log('pieDataKey:', pieDataKey)
-        console.log('pieNameKey:', pieNameKey)
-        console.log('series:', series)
-        console.log('yAxis:', yAxis)
+        // Convert string values to numbers for pie chart
+        const pieChartData = chartData.map((item) => ({
+          ...item,
+          [pieDataKey]: typeof item[pieDataKey] === 'string'
+            ? parseFloat(item[pieDataKey])
+            : item[pieDataKey],
+        }))
 
         const RADIAN = Math.PI / 180
         const renderCustomizedLabel = ({
@@ -386,7 +435,7 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
         return (
           <PieChart>
             <Pie
-              data={chartData}
+              data={pieChartData}
               dataKey={pieDataKey}
               nameKey={pieNameKey}
               cx="50%"
@@ -397,7 +446,7 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
               labelLine={false}
               paddingAngle={2}
             >
-              {chartData.map((_, index) => (
+              {pieChartData.map((_, index) => (
                 <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
               ))}
             </Pie>
@@ -452,31 +501,60 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
           </div>
         </div>
 
-        {/* Stats Sidebar */}
-        {stats && (
+        {/* Stats Sidebar - Dynamic rendering with backend summaryStats priority */}
+        {(chartConfig.summaryStats?.items?.length || stats) && (
           <div className="lg:border-l lg:border-slate-200 lg:pl-8 flex flex-col justify-center space-y-4">
-            <div>
-              <p className="text-slate-500 text-sm font-medium mb-1">Total</p>
-              <p className="text-slate-900 text-3xl font-bold tracking-tight">
-                {formatNumber(stats.total)}
-              </p>
-            </div>
-            <div>
-              <p className="text-slate-500 text-sm font-medium mb-1">Average</p>
-              <p className="text-slate-900 text-xl font-semibold">
-                {formatNumber(stats.avg, 1)}
-              </p>
-            </div>
-            <div>
-              <p className="text-slate-500 text-sm font-medium mb-1">Peak</p>
-              <p className="text-slate-900 text-xl font-semibold">
-                {formatNumber(stats.max)}
-              </p>
-            </div>
-            <div>
-              <p className="text-slate-500 text-sm font-medium mb-1">Data Points</p>
-              <p className="text-slate-700 text-lg">{stats.count}</p>
-            </div>
+            {/* Backend summaryStats가 있으면 사용 */}
+            {chartConfig.summaryStats?.items?.length ? (
+              <>
+                {chartConfig.summaryStats.source === 'llm' && (
+                  <div className="flex items-center gap-1 mb-2">
+                    <span className="text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded font-medium">
+                      AI 분석
+                    </span>
+                  </div>
+                )}
+                {chartConfig.summaryStats.items.slice(0, 4).map((item: SummaryStatItem) => (
+                  <div key={item.key} className={item.highlight ? 'bg-blue-50/50 -mx-2 px-2 py-1 rounded-lg' : ''}>
+                    <div className="flex items-center gap-1.5 mb-1">
+                      {item.icon && (
+                        <Icon name={item.icon} size="xs" className="text-slate-400" />
+                      )}
+                      <p className="text-slate-500 text-sm font-medium">{item.label}</p>
+                    </div>
+                    <p className={`text-slate-900 ${item.highlight ? 'text-xl font-bold' : 'text-lg font-semibold'}`}>
+                      {formatStatValue(item.value, item.type)}
+                    </p>
+                  </div>
+                ))}
+              </>
+            ) : stats && (
+              /* 폴백: 기존 프론트엔드 계산 stats */
+              <>
+                <div>
+                  <p className="text-slate-500 text-sm font-medium mb-1">Total</p>
+                  <p className="text-slate-900 text-3xl font-bold tracking-tight">
+                    {formatNumber(stats.total)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-slate-500 text-sm font-medium mb-1">Average</p>
+                  <p className="text-slate-900 text-xl font-semibold">
+                    {formatNumber(stats.avg, 1)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-slate-500 text-sm font-medium mb-1">Peak</p>
+                  <p className="text-slate-900 text-xl font-semibold">
+                    {formatNumber(stats.max)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-slate-500 text-sm font-medium mb-1">Data Points</p>
+                  <p className="text-slate-700 text-lg">{stats.count}</p>
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>

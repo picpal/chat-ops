@@ -242,6 +242,52 @@
               "enum": ["llm", "template", "none"]
             }
           }
+        },
+        "summaryStats": {
+          "type": "object",
+          "description": "차트 유형에 맞는 동적 Summary Stats (LLM 생성)",
+          "properties": {
+            "items": {
+              "type": "array",
+              "description": "Summary Stats 항목 목록",
+              "items": {
+                "type": "object",
+                "required": ["key", "label", "value", "type"],
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "description": "항목 고유 키 (예: max_share, total, trend)"
+                  },
+                  "label": {
+                    "type": "string",
+                    "description": "표시 라벨 (한국어, 예: 최대 비중)"
+                  },
+                  "value": {
+                    "type": ["string", "number", "null"],
+                    "description": "표시 값 (예: '뷰티 코스메틱 (13%)', 14500000)"
+                  },
+                  "type": {
+                    "type": "string",
+                    "description": "값 타입 (포맷팅용)",
+                    "enum": ["number", "currency", "percentage", "text", "trend"]
+                  },
+                  "highlight": {
+                    "type": "boolean",
+                    "description": "강조 표시 여부"
+                  },
+                  "icon": {
+                    "type": "string",
+                    "description": "Material Icon 이름 (예: emoji_events, trending_up)"
+                  }
+                }
+              }
+            },
+            "source": {
+              "type": "string",
+              "description": "Summary Stats 생성 소스",
+              "enum": ["llm", "rule", "fallback"]
+            }
+          }
         }
       }
     },

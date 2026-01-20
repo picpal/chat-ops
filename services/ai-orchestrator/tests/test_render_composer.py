@@ -909,3 +909,320 @@ class TestChartTypeSnakeCaseFields:
             "주간 결제 추이 그래프"
         )
         assert chart_type == "line", "week 필드는 시계열로 line"
+
+
+class TestSummaryStatsGeneration:
+    """
+    Summary Stats 생성 테스트
+    - _calculate_extended_stats()
+    - _generate_rule_based_stats()
+    - _generate_summary_stats()
+    - compose_sql_render_spec()에서 summaryStats 포함 여부
+    """
+
+    def setup_method(self):
+        from app.services.sql_render_composer import (
+            _calculate_extended_stats,
+            _generate_rule_based_stats,
+            _generate_summary_stats,
+            compose_sql_render_spec
+        )
+        self.calculate_extended_stats = _calculate_extended_stats
+        self.generate_rule_based_stats = _generate_rule_based_stats
+        self.generate_summary_stats = _generate_summary_stats
+        self.compose_sql_render_spec = compose_sql_render_spec
+
+    def test_calculate_extended_stats_pie_chart(self):
+        """파이 차트용 확장 통계 계산 (비율, 집중도)"""
+        data = [
+            {"status": "DONE", "count": 100},
+            {"status": "CANCELED", "count": 20},
+            {"status": "PENDING", "count": 10}
+        ]
+        stats = self.calculate_extended_stats(
+            data=data,
+            x_key="status",
+            y_key="count",
+            chart_type="pie"
+        )
+
+        assert stats["count"] == 3
+        assert stats["total"] == 130
+        assert stats["max"] == 100
+        assert stats["max_category"] == "DONE"
+        assert stats["min"] == 10
+        assert stats["min_category"] == "PENDING"
+        # 파이 차트 전용 필드
+        assert "max_share" in stats
+        assert stats["max_share"] > 75  # 100/130 = ~76.9%
+        assert "concentration" in stats
+
+    def test_calculate_extended_stats_line_chart(self):
+        """라인 차트용 확장 통계 계산 (추세, 변동성, 성장률)"""
+        data = [
+            {"approvedAt": "2024-01-01", "count": 100},
+            {"approvedAt": "2024-01-02", "count": 120},
+            {"approvedAt": "2024-01-03", "count": 150},
+            {"approvedAt": "2024-01-04", "count": 140}
+        ]
+        stats = self.calculate_extended_stats(
+            data=data,
+            x_key="approvedAt",
+            y_key="count",
+            chart_type="line"
+        )
+
+        assert stats["count"] == 4
+        assert "growth_rate" in stats
+        assert "trend" in stats
+        assert stats["trend"] in ["증가", "감소", "유지"]
+        assert "volatility" in stats
+        assert "peak_time" in stats
+        assert "period_start" in stats
+        assert "period_end" in stats
+        assert stats["period_start"] == "2024-01-01"
+        assert stats["period_end"] == "2024-01-04"
+
+    def test_calculate_extended_stats_bar_chart(self):
+        """바 차트용 확장 통계 계산 (범위, 평균 대비)"""
+        data = [
+            {"merchantId": "M001", "totalAmount": 500000},
+            {"merchantId": "M002", "totalAmount": 400000},
+            {"merchantId": "M003", "totalAmount": 300000}
+        ]
+        stats = self.calculate_extended_stats(
+            data=data,
+            x_key="merchantId",
+            y_key="totalAmount",
+            chart_type="bar"
+        )
+
+        assert stats["count"] == 3
+        assert stats["max"] == 500000
+        assert stats["min"] == 300000
+        assert "range" in stats
+        assert stats["range"] == 200000
+        assert "max_vs_avg" in stats
+        assert stats["max_vs_avg"] > 0
+
+    def test_generate_rule_based_stats_pie(self):
+        """규칙 기반 Summary Stats 생성 - 파이 차트"""
+        stats = {
+            "count": 3,
+            "total": 130,
+            "max": 100,
+            "min": 10,
+            "max_category": "DONE",
+            "min_category": "PENDING",
+            "max_share": 76.9,
+            "min_share": 7.7,
+            "concentration": 92.3
+        }
+        result = self.generate_rule_based_stats(
+            stats=stats,
+            chart_type="pie",
+            x_key="status",
+            y_key="count"
+        )
+
+        assert "items" in result
+        assert "source" in result
+        assert result["source"] == "rule"
+        assert len(result["items"]) == 5  # max_share, min_share, total, count, concentration
+
+        # 첫 번째 항목은 max_share (highlight=True)
+        first_item = result["items"][0]
+        assert first_item["key"] == "max_share"
+        assert first_item["highlight"] is True
+        assert "DONE" in first_item["value"]
+
+    def test_generate_rule_based_stats_line(self):
+        """규칙 기반 Summary Stats 생성 - 라인 차트"""
+        stats = {
+            "count": 4,
+            "total": 510,
+            "avg": 127.5,
+            "max": 150,
+            "peak_time": "2024-01-03",
+            "growth_rate": 18.5,
+            "trend": "증가",
+            "period_start": "2024-01-01",
+            "period_end": "2024-01-04"
+        }
+        result = self.generate_rule_based_stats(
+            stats=stats,
+            chart_type="line",
+            x_key="approvedAt",
+            y_key="count"
+        )
+
+        assert "items" in result
+        assert len(result["items"]) == 5  # trend, peak_time, growth_rate, period, avg
+
+        # 첫 번째 항목은 trend (highlight=True)
+        first_item = result["items"][0]
+        assert first_item["key"] == "trend"
+        assert first_item["value"] == "증가"
+        assert first_item["highlight"] is True
+
+    def test_generate_rule_based_stats_bar(self):
+        """규칙 기반 Summary Stats 생성 - 바 차트"""
+        stats = {
+            "count": 3,
+            "total": 1200000,
+            "avg": 400000,
+            "max": 500000,
+            "min": 300000,
+            "max_category": "M001",
+            "min_category": "M003",
+            "range": 200000,
+            "max_vs_avg": 1.25
+        }
+        result = self.generate_rule_based_stats(
+            stats=stats,
+            chart_type="bar",
+            x_key="merchantId",
+            y_key="totalAmount"
+        )
+
+        assert "items" in result
+        assert len(result["items"]) == 5  # rank_1, rank_last, avg, range, max_vs_avg
+
+        # 첫 번째 항목은 rank_1 (highlight=True)
+        first_item = result["items"][0]
+        assert first_item["key"] == "rank_1"
+        assert "M001" in first_item["value"]
+        assert first_item["highlight"] is True
+
+    def test_generate_summary_stats_fallback(self):
+        """Summary Stats 생성 - 규칙 기반 폴백 (템플릿 없음)"""
+        data = [
+            {"status": "DONE", "count": 100},
+            {"status": "CANCELED", "count": 20}
+        ]
+        result = self.generate_summary_stats(
+            data=data,
+            x_key="status",
+            y_key="count",
+            chart_type="pie",
+            template=None
+        )
+
+        assert "items" in result
+        assert "source" in result
+        assert result["source"] == "rule"
+        assert len(result["items"]) > 0
+
+    def test_generate_summary_stats_with_llm_template(self):
+        """Summary Stats 생성 - LLM 템플릿 적용"""
+        data = [
+            {"status": "DONE", "count": 100},
+            {"status": "CANCELED", "count": 20}
+        ]
+        template = [
+            {
+                "key": "top_category",
+                "label": "최다 항목",
+                "value": "{maxCategory} ({maxShare})",
+                "type": "text",
+                "highlight": True,
+                "icon": "star"
+            },
+            {
+                "key": "total_count",
+                "label": "총 건수",
+                "value": "{total}",
+                "type": "number",
+                "icon": "functions"
+            }
+        ]
+        result = self.generate_summary_stats(
+            data=data,
+            x_key="status",
+            y_key="count",
+            chart_type="pie",
+            template=template
+        )
+
+        assert "items" in result
+        assert "source" in result
+        assert result["source"] == "llm"
+        assert len(result["items"]) == 2
+
+        # 템플릿의 플레이스홀더가 치환되었는지 확인
+        first_item = result["items"][0]
+        assert first_item["key"] == "top_category"
+        assert "DONE" in first_item["value"]
+        assert "%" in first_item["value"]  # maxShare가 치환됨
+
+    def test_compose_sql_render_spec_includes_summary_stats(self):
+        """compose_sql_render_spec()가 차트 렌더링 시 summaryStats를 포함하는지 확인"""
+        result = {
+            "data": [
+                {"status": "DONE", "count": 100},
+                {"status": "CANCELED", "count": 20},
+                {"status": "PENDING", "count": 10}
+            ],
+            "rowCount": 3,
+            "sql": "SELECT status, COUNT(*) as count FROM payments GROUP BY status",
+            "executionTimeMs": 15
+        }
+
+        # 차트로 렌더링
+        render_spec = self.compose_sql_render_spec(
+            result=result,
+            question="상태별 결제 비율 차트로",
+            llm_chart_type="pie"
+        )
+
+        assert render_spec["type"] == "chart"
+        assert "chart" in render_spec
+        assert "summaryStats" in render_spec["chart"]
+
+        summary_stats = render_spec["chart"]["summaryStats"]
+        assert "items" in summary_stats
+        assert "source" in summary_stats
+        assert len(summary_stats["items"]) > 0
+
+        # 파이 차트이므로 max_share 항목이 있어야 함
+        keys = [item["key"] for item in summary_stats["items"]]
+        assert "max_share" in keys
+
+    def test_compose_sql_render_spec_chart_with_insight_and_stats(self):
+        """차트 렌더링 시 insight와 summaryStats가 모두 포함되는지 확인"""
+        result = {
+            "data": [
+                {"approvedAt": "2024-01-01", "count": 100},
+                {"approvedAt": "2024-01-02", "count": 120},
+                {"approvedAt": "2024-01-03", "count": 150}
+            ],
+            "rowCount": 3,
+            "sql": "SELECT approved_at, COUNT(*) FROM payments GROUP BY approved_at",
+            "executionTimeMs": 20
+        }
+
+        render_spec = self.compose_sql_render_spec(
+            result=result,
+            question="일별 결제 추이 그래프",
+            llm_chart_type="line"
+        )
+
+        assert render_spec["type"] == "chart"
+        assert "chart" in render_spec
+
+        # insight 확인
+        assert "insight" in render_spec["chart"]
+        insight = render_spec["chart"]["insight"]
+        assert "content" in insight
+        assert "source" in insight
+
+        # summaryStats 확인
+        assert "summaryStats" in render_spec["chart"]
+        summary_stats = render_spec["chart"]["summaryStats"]
+        assert "items" in summary_stats
+        assert "source" in summary_stats
+        assert len(summary_stats["items"]) > 0
+
+        # 라인 차트이므로 trend 항목이 있어야 함
+        keys = [item["key"] for item in summary_stats["items"]]
+        assert "trend" in keys

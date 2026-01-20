@@ -115,6 +115,22 @@ export interface InsightConfig {
   source: 'llm' | 'template' | 'none'
 }
 
+// Summary Stats item for dynamic chart statistics
+export interface SummaryStatItem {
+  key: string                          // 항목 고유 키 (예: max_share, total, trend)
+  label: string                        // 표시 라벨 (한국어, 예: 최대 비중)
+  value: string | number | null        // 표시 값
+  type: 'number' | 'currency' | 'percentage' | 'text' | 'trend'
+  highlight?: boolean                  // 강조 표시 여부
+  icon?: string                        // Material Icon 이름
+}
+
+// Summary Stats configuration
+export interface SummaryStatsConfig {
+  items: SummaryStatItem[]
+  source: 'llm' | 'rule' | 'fallback'
+}
+
 export interface ChartConfig {
   chartType: ChartType
   dataRef?: string
@@ -124,6 +140,7 @@ export interface ChartConfig {
   legend?: boolean
   tooltip?: boolean
   insight?: InsightConfig  // AI가 생성한 인사이트
+  summaryStats?: SummaryStatsConfig  // 차트 유형에 맞는 동적 Summary Stats
 }
 
 export interface ChartRenderSpec extends BaseRenderSpec {

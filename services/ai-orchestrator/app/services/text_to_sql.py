@@ -1025,15 +1025,15 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
 
         return "\n".join(parts)
 
-    def _parse_llm_response(self, raw_response: str) -> Tuple[str, Optional[str], Optional[str], Optional[str]]:
+    def _parse_llm_response(self, raw_response: str) -> Tuple[str, Optional[str], Optional[str], Optional[str], Optional[List[Dict[str, Any]]]]:
         """
-        LLM 응답에서 SQL, 차트 타입, 인사이트 템플릿 추출
+        LLM 응답에서 SQL, 차트 타입, 인사이트 템플릿, Summary Stats 템플릿 추출
 
         Args:
             raw_response: LLM 원본 응답
 
         Returns:
-            (sql, chart_type, chart_reason, insight_template) 튜플
+            (sql, chart_type, chart_reason, insight_template, summary_stats_template) 튜플
         """
         # JSON 블록 추출 시도
         json_match = re.search(r'```json\s*(.*?)\s*```', raw_response, re.DOTALL)
@@ -1044,8 +1044,9 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
                 chart_type = data.get("chartType")
                 chart_reason = data.get("chartReason")
                 insight_template = data.get("insightTemplate")
-                logger.info(f"Parsed JSON response - chartType: {chart_type}, reason: {chart_reason}, insightTemplate: {insight_template is not None}")
-                return (sql, chart_type, chart_reason, insight_template)
+                summary_stats_template = data.get("summaryStatsTemplate")
+                logger.info(f"Parsed JSON response - chartType: {chart_type}, reason: {chart_reason}, insightTemplate: {insight_template is not None}, summaryStatsTemplate: {summary_stats_template is not None}")
+                return (sql, chart_type, chart_reason, insight_template, summary_stats_template)
             except json.JSONDecodeError as e:
                 logger.warning(f"Failed to parse JSON block: {e}")
 
@@ -1056,8 +1057,9 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
             chart_type = data.get("chartType")
             chart_reason = data.get("chartReason")
             insight_template = data.get("insightTemplate")
-            logger.info(f"Parsed direct JSON - chartType: {chart_type}, reason: {chart_reason}, insightTemplate: {insight_template is not None}")
-            return (sql, chart_type, chart_reason, insight_template)
+            summary_stats_template = data.get("summaryStatsTemplate")
+            logger.info(f"Parsed direct JSON - chartType: {chart_type}, reason: {chart_reason}, insightTemplate: {insight_template is not None}, summaryStatsTemplate: {summary_stats_template is not None}")
+            return (sql, chart_type, chart_reason, insight_template, summary_stats_template)
         except json.JSONDecodeError:
             pass
 
@@ -1076,13 +1078,13 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
                     sql_lines.append(line)
             sql = "\n".join(sql_lines).strip()
 
-        return (sql.strip(), None, None, None)
+        return (sql.strip(), None, None, None, None)
 
     async def generate_sql(
         self,
         question: str,
         conversation_context: Optional[ConversationContext] = None
-    ) -> Tuple[str, ValidationResult, Optional[str], Optional[str]]:
+    ) -> Tuple[str, ValidationResult, Optional[str], Optional[str], Optional[List[Dict[str, Any]]]]:
         """
         자연어를 SQL로 변환
 
@@ -1091,7 +1093,7 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
             conversation_context: 연속 대화 컨텍스트
 
         Returns:
-            (생성된 SQL, 검증 결과, 추천 차트 타입, 인사이트 템플릿) 튜플
+            (생성된 SQL, 검증 결과, 추천 차트 타입, 인사이트 템플릿, summaryStats 템플릿) 튜플
         """
         # RAG 컨텍스트 조회
         rag_context = await self._get_rag_context(question)
@@ -1103,20 +1105,22 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
         llm = self._get_llm()
         response = await llm.ainvoke(prompt)
 
-        # JSON 응답 파싱 (SQL + 차트 타입 + 인사이트 템플릿)
+        # JSON 응답 파싱 (SQL + 차트 타입 + 인사이트 템플릿 + summaryStats 템플릿)
         raw_response = response.content.strip()
-        raw_sql, chart_type, chart_reason, insight_template = self._parse_llm_response(raw_response)
+        raw_sql, chart_type, chart_reason, insight_template, summary_stats_template = self._parse_llm_response(raw_response)
 
         logger.info(f"Generated SQL: {raw_sql[:200]}...")
         if chart_type:
             logger.info(f"LLM chart type recommendation: {chart_type} (reason: {chart_reason})")
         if insight_template:
             logger.info(f"LLM insight template: {insight_template[:100]}...")
+        if summary_stats_template:
+            logger.info(f"LLM summaryStats template: {len(summary_stats_template)} items")
 
         # SQL 검증
         validation_result = self.validator.validate(raw_sql)
 
-        return raw_sql, validation_result, chart_type, insight_template
+        return raw_sql, validation_result, chart_type, insight_template, summary_stats_template
 
     def _get_count(self, sql: str) -> int:
         """
@@ -1262,8 +1266,8 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
             is_refinement=is_refinement
         )
 
-        # SQL 생성 (차트 타입 + 인사이트 템플릿 포함)
-        raw_sql, validation_result, llm_chart_type, insight_template = await self.generate_sql(question, conversation_context)
+        # SQL 생성 (차트 타입 + 인사이트 템플릿 + summaryStats 템플릿 포함)
+        raw_sql, validation_result, llm_chart_type, insight_template, summary_stats_template = await self.generate_sql(question, conversation_context)
 
         if not validation_result.is_valid:
             return {
@@ -1274,7 +1278,8 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
                 "error": f"SQL validation failed: {', '.join(validation_result.issues)}",
                 "executionTimeMs": 0,
                 "llmChartType": llm_chart_type,  # 검증 실패 시에도 차트 타입 포함
-                "insightTemplate": insight_template  # 검증 실패 시에도 인사이트 템플릿 포함
+                "insightTemplate": insight_template,  # 검증 실패 시에도 인사이트 템플릿 포함
+                "summaryStatsTemplate": summary_stats_template  # 검증 실패 시에도 summaryStats 템플릿 포함
             }
 
         # SQL 실행
@@ -1290,7 +1295,7 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
                 previous_result_summary=f"ERROR: {result.error}"
             )
 
-            raw_sql, validation_result, llm_chart_type, insight_template = await self.generate_sql(
+            raw_sql, validation_result, llm_chart_type, insight_template, summary_stats_template = await self.generate_sql(
                 f"{question}\n\n(이전 SQL 오류: {result.error}. 다른 방법으로 시도해주세요.)",
                 retry_context
             )
@@ -1324,7 +1329,8 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
             "isAggregation": agg_ctx is not None,   # 집계 쿼리 여부
             "aggregationContext": aggregation_context,  # 집계 컨텍스트 (None이면 일반 쿼리)
             "llmChartType": llm_chart_type,         # LLM 추천 차트 타입
-            "insightTemplate": insight_template     # LLM 생성 인사이트 템플릿
+            "insightTemplate": insight_template,    # LLM 생성 인사이트 템플릿
+            "summaryStatsTemplate": summary_stats_template  # LLM 생성 summaryStats 템플릿
         }
 
     def _build_conversation_context(

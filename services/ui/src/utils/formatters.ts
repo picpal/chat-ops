@@ -69,6 +69,26 @@ export const formatNumber = (num: number, decimals: number = 0): string => {
 }
 
 /**
+ * Format large numbers with compact notation (K, M, B)
+ */
+export const formatCompactNumber = (num: number, decimals: number = 1): string => {
+  try {
+    if (Math.abs(num) >= 1_000_000_000) {
+      return (num / 1_000_000_000).toFixed(decimals) + 'B'
+    }
+    if (Math.abs(num) >= 1_000_000) {
+      return (num / 1_000_000).toFixed(decimals) + 'M'
+    }
+    if (Math.abs(num) >= 10_000) {
+      return (num / 1_000).toFixed(decimals) + 'K'
+    }
+    return formatNumber(num, decimals)
+  } catch (error) {
+    return num.toString()
+  }
+}
+
+/**
  * Format percentage
  */
 export const formatPercentage = (value: number, decimals: number = 1): string => {

@@ -31,6 +31,8 @@ from app.services.conversation_context import (
     get_previous_query_plan,
     extract_previous_results,
     merge_filters,
+    extract_aggregation_value,
+    is_arithmetic_request,
 )
 
 # SQL RenderSpec 작성기
@@ -857,10 +859,44 @@ async def handle_text_to_sql(
     Text-to-SQL 모드 처리
 
     AI가 직접 SQL을 생성하고 읽기 전용 DB에서 실행합니다.
+
+    Phase 1 추가: 산술 연산 요청 감지
+    - 이전 집계 결과가 있고 + 산술 연산 요청인 경우
+    - DB 조회 없이 직접 계산하여 응답
     """
     logger.info(f"[{request_id}] Text-to-SQL mode: processing")
 
     try:
+        # ========================================
+        # Phase 1: 산술 연산 요청 감지 (수수료, VAT 등)
+        # ========================================
+        if request.conversation_history:
+            logger.info(f"[{request_id}] Phase 1: Checking arithmetic request, history size={len(request.conversation_history)}")
+
+            # 디버그: conversation_history 구조 확인
+            for i, msg in enumerate(request.conversation_history[-3:]):  # 최근 3개만
+                logger.info(f"[{request_id}] Phase 1 Debug: msg[{i}] role={msg.role}, has_renderSpec={msg.renderSpec is not None}, has_queryResult={msg.queryResult is not None}")
+                if msg.renderSpec:
+                    logger.info(f"[{request_id}] Phase 1 Debug: msg[{i}] renderSpec.type={msg.renderSpec.get('type')}")
+                if msg.queryResult:
+                    logger.info(f"[{request_id}] Phase 1 Debug: msg[{i}] queryResult.isAggregation={msg.queryResult.get('isAggregation')}")
+
+            aggregation_result = extract_aggregation_value(request.conversation_history)
+            is_arithmetic = is_arithmetic_request(request.message)
+            logger.info(f"[{request_id}] Phase 1: aggregation_result={aggregation_result is not None}, is_arithmetic={is_arithmetic}")
+
+            if aggregation_result and is_arithmetic:
+                logger.info(f"[{request_id}] Arithmetic request detected, invoking direct calculation")
+                logger.info(f"[{request_id}] Previous aggregation: {aggregation_result['formatted']}, context: {aggregation_result['context']}")
+
+                direct_result = await _perform_direct_calculation(
+                    request_id, request.message, aggregation_result, start_time
+                )
+                if direct_result:
+                    return direct_result
+                # 직접 계산 실패 시 기존 SQL 생성 로직으로 fallback
+                logger.info(f"[{request_id}] Direct calculation failed, falling back to SQL generation")
+
         text_to_sql = get_text_to_sql_service()
 
         # 참조 표현 감지 (연속 대화 WHERE 조건 병합용)
@@ -884,15 +920,18 @@ async def handle_text_to_sql(
 
         if result["success"]:
             # 성공: 데이터를 RenderSpec으로 변환
-            # LLM 추천 차트 타입 및 인사이트 템플릿 추출
+            # LLM 추천 차트 타입, 인사이트 템플릿, summaryStats 템플릿 추출
             llm_chart_type = result.get("llmChartType")
             insight_template = result.get("insightTemplate")
+            summary_stats_template = result.get("summaryStatsTemplate")
             if llm_chart_type:
                 logger.info(f"[{request_id}] LLM chart type: {llm_chart_type}")
             if insight_template:
                 logger.info(f"[{request_id}] LLM insight template: {insight_template[:50]}...")
+            if summary_stats_template:
+                logger.info(f"[{request_id}] LLM summaryStats template: {len(summary_stats_template)} items")
 
-            render_spec = compose_sql_render_spec(result, request.message, llm_chart_type, insight_template)
+            render_spec = compose_sql_render_spec(result, request.message, llm_chart_type, insight_template, summary_stats_template)
 
             # 집계 쿼리 메타데이터 추가
             is_aggregation = result.get("isAggregation", False)
@@ -1048,3 +1087,129 @@ def build_sql_history(conversation_history: Optional[List[ChatMessageItem]]) -> 
         sql_history.append(entry)
 
     return sql_history
+
+
+# ============================================
+# 직접 계산 핸들러 (산술 연산 요청용)
+# ============================================
+
+async def _perform_direct_calculation(
+    request_id: str,
+    message: str,
+    aggregation_result: Dict[str, Any],
+    start_time: datetime
+) -> Optional[ChatResponse]:
+    """
+    이전 집계 결과에 대한 산술 연산 수행 (DB 조회 없이)
+
+    수수료, VAT, 비율 계산 등을 LLM을 통해 직접 계산합니다.
+
+    Args:
+        request_id: 요청 ID
+        message: 사용자 메시지
+        aggregation_result: 이전 집계 결과 정보
+        start_time: 처리 시작 시간
+
+    Returns:
+        ChatResponse 또는 None (계산 실패 시)
+    """
+    try:
+        from langchain_openai import ChatOpenAI
+        from langchain_anthropic import ChatAnthropic
+        import os
+
+        # LLM 설정 (빠른 응답을 위해 가벼운 모델 사용)
+        llm_provider = os.getenv("LLM_PROVIDER", "openai")
+
+        if llm_provider == "anthropic":
+            llm = ChatAnthropic(
+                model=os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest"),
+                temperature=0
+            )
+        else:
+            llm = ChatOpenAI(
+                model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                temperature=0
+            )
+
+        # 계산 프롬프트 구성
+        base_amount = aggregation_result["amount"]
+        context = aggregation_result.get("context", "이전 조회 결과")
+
+        calculation_prompt = f"""당신은 숫자 계산 전문가입니다. 사용자의 요청에 따라 정확한 계산을 수행하세요.
+
+## 기준 금액
+- 금액: {base_amount:,.0f}원
+- 컨텍스트: {context}
+
+## 사용자 요청
+{message}
+
+## 응답 형식
+다음 형식으로 응답해주세요:
+1. 첫 줄: 계산 결과 금액만 (예: "87,383원")
+2. 빈 줄
+3. 계산 과정 설명 (간단히)
+
+## 주의사항
+- 퍼센트 계산: X%는 기준 금액의 X/100을 곱함
+- 수수료: 기준 금액 × 수수료율
+- VAT 포함: 기준 금액 × 1.1 (10% VAT인 경우)
+- VAT 제외: 기준 금액 ÷ 1.1 (10% VAT인 경우)
+- 소수점 이하는 반올림하여 정수로 표시
+"""
+
+        # LLM 호출
+        response = await llm.ainvoke(calculation_prompt)
+        result_text = response.content.strip()
+
+        if not result_text:
+            logger.warning(f"[{request_id}] Direct calculation returned empty result")
+            return None
+
+        total_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+        logger.info(f"[{request_id}] Direct calculation completed: {result_text[:100]}...")
+
+        # RenderSpec 구성
+        render_spec = {
+            "type": "text",
+            "title": "계산 결과",
+            "text": {
+                "content": f"**{aggregation_result['formatted']}** 기준\n\n{result_text}",
+                "format": "markdown"
+            },
+            "metadata": {
+                "requestId": request_id,
+                "generatedAt": datetime.utcnow().isoformat() + "Z",
+                "mode": "text_to_sql_direct_answer",
+                "baseAmount": base_amount,
+                "context": context
+            }
+        }
+
+        return ChatResponse(
+            request_id=request_id,
+            render_spec=render_spec,
+            query_result={
+                "requestId": request_id,
+                "status": "success",
+                "data": {"rows": [], "aggregations": {}},
+                "metadata": {
+                    "executionTimeMs": total_time_ms,
+                    "rowsReturned": 0,
+                    "dataSource": "direct_calculation"
+                }
+            },
+            query_plan={
+                "mode": "text_to_sql_direct_answer",
+                "calculation_type": "arithmetic",
+                "base_amount": base_amount,
+                "requestId": request_id
+            },
+            ai_message=result_text.split('\n')[0] if result_text else "계산이 완료되었습니다.",
+            timestamp=datetime.utcnow().isoformat() + "Z"
+        )
+
+    except Exception as e:
+        logger.error(f"[{request_id}] Direct calculation error: {e}", exc_info=True)
+        return None

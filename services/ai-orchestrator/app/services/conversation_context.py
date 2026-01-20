@@ -13,6 +13,7 @@ from app.constants.reference_patterns import (
     REFERENCE_PATTERNS,
     NEW_QUERY_PATTERNS,
     AGGREGATION_KEYWORDS,
+    ARITHMETIC_REQUEST_PATTERNS,
 )
 
 if TYPE_CHECKING:
@@ -448,3 +449,227 @@ def extract_previous_results(history: List["ChatMessageItem"]) -> List[Dict[str,
 
     logger.info(f"[extract_previous_results] Total results extracted: {len(results)}")
     return results
+
+
+# ============================================
+# 집계 결과값 추출 (Text-to-SQL 직접 계산용)
+# ============================================
+
+def extract_aggregation_value(history: List["ChatMessageItem"]) -> Optional[Dict[str, Any]]:
+    """
+    이전 대화에서 집계 금액 추출 (Text-to-SQL 직접 계산용)
+
+    집계 결과(합계, 평균 등)가 있는 경우 해당 금액과 컨텍스트를 반환합니다.
+    후속 질문에서 수수료, VAT 등 산술 연산에 사용됩니다.
+
+    Args:
+        history: 대화 이력
+
+    Returns:
+        집계 결과 정보 dict 또는 None
+        {
+            "amount": float,           # 집계 금액
+            "formatted": str,          # 포맷된 금액 문자열
+            "context": str,            # 집계 컨텍스트 (예: "도서 관련 결제 합계")
+            "source_index": int,       # 원본 메시지 인덱스
+            "aggregation_type": str    # 집계 유형 (sum, avg 등)
+        }
+    """
+    if not history:
+        return None
+
+    # 역순으로 탐색하여 가장 최근 집계 결과 찾기
+    for i, msg in enumerate(reversed(history)):
+        actual_index = len(history) - 1 - i
+
+        if msg.role != "assistant":
+            continue
+
+        # 직접 계산 결과는 집계 결과에서 제외 (수수료 계산 결과 등)
+        if msg.renderSpec:
+            metadata = msg.renderSpec.get("metadata", {})
+            if metadata.get("mode") == "text_to_sql_direct_answer":
+                logger.info(f"[extract_aggregation_value] Skipping direct_answer result at index {actual_index}")
+                continue
+
+        # 1순위: RenderSpec이 text 타입이면 집계 결과일 가능성 높음
+        if msg.renderSpec and msg.renderSpec.get("type") == "text":
+            text_content = msg.renderSpec.get("text", {}).get("content", "")
+            amount = _extract_amount_from_text(text_content)
+            if amount is not None:
+                # 컨텍스트 추출 (이전 사용자 메시지에서)
+                context = _extract_aggregation_context(history, actual_index)
+                logger.info(f"[extract_aggregation_value] Found aggregation from renderSpec text: {amount:,.0f}, context: {context}")
+                return {
+                    "amount": amount,
+                    "formatted": f"₩{amount:,.0f}" if amount >= 1 else f"${amount:,.2f}",
+                    "context": context,
+                    "source_index": actual_index,
+                    "aggregation_type": "sum"  # 기본값
+                }
+
+        # 2순위: queryResult에서 집계 정보 확인
+        if msg.queryResult:
+            # isAggregation 플래그 확인
+            is_aggregation = msg.queryResult.get("isAggregation", False)
+            if is_aggregation:
+                # aggregationContext에서 금액 추출
+                agg_context = msg.queryResult.get("aggregationContext", {})
+                if agg_context.get("total_amount"):
+                    amount = float(agg_context["total_amount"])
+                    context = _extract_aggregation_context(history, actual_index)
+                    logger.info(f"[extract_aggregation_value] Found aggregation from queryResult: {amount:,.0f}")
+                    return {
+                        "amount": amount,
+                        "formatted": f"₩{amount:,.0f}",
+                        "context": context,
+                        "source_index": actual_index,
+                        "aggregation_type": agg_context.get("aggregation_type", "sum")
+                    }
+
+            # data.rows에서 단일 집계 결과 확인 (예: SELECT SUM(amount))
+            data = msg.queryResult.get("data", {})
+            rows = data.get("rows", [])
+            if rows and len(rows) == 1 and isinstance(rows[0], dict):
+                row = rows[0]
+                # 집계 필드 패턴 확인
+                for key in ["sum", "total", "total_amount", "totalAmount", "합계", "sum_amount"]:
+                    if key in row and row[key] is not None:
+                        try:
+                            amount = float(row[key])
+                            context = _extract_aggregation_context(history, actual_index)
+                            logger.info(f"[extract_aggregation_value] Found aggregation from single row: {amount:,.0f}")
+                            return {
+                                "amount": amount,
+                                "formatted": f"₩{amount:,.0f}",
+                                "context": context,
+                                "source_index": actual_index,
+                                "aggregation_type": "sum"
+                            }
+                        except (ValueError, TypeError):
+                            continue
+
+    logger.info("[extract_aggregation_value] No aggregation result found in history")
+    return None
+
+
+def _extract_amount_from_text(text: str) -> Optional[float]:
+    """
+    텍스트에서 금액 파싱
+
+    우선순위:
+    1. 괄호 안 전체 금액: (14,563,862원) → 14563862
+    2. M/K/억/만 접미사: $2.88M → 2880000, 1,456만원 → 14560000
+    3. 일반 금액: ₩14,563,862 → 14563862
+
+    Args:
+        text: 금액을 포함한 텍스트
+
+    Returns:
+        추출된 금액 또는 None
+    """
+    if not text:
+        return None
+
+    # 1순위: 괄호 안의 전체 금액 (예: "(14,563,862원)" 또는 "($14,563,862)")
+    paren_patterns = [
+        r'\(\s*₩?\$?([\d,]+(?:\.\d+)?)\s*원?\s*\)',  # (14,563,862원) or ($14,563,862)
+        r'\(\s*원?\s*₩?\$?([\d,]+(?:\.\d+)?)\s*\)',  # (원 14,563,862)
+    ]
+    for pattern in paren_patterns:
+        match = re.search(pattern, text)
+        if match:
+            try:
+                return float(match.group(1).replace(',', ''))
+            except ValueError:
+                continue
+
+    # 2순위: 억/만 접미사 (예: "1,456만원", "14억원")
+    korean_suffix_pattern = r'([\d,]+(?:\.\d+)?)\s*(억|만)\s*원?'
+    match = re.search(korean_suffix_pattern, text)
+    if match:
+        try:
+            value = float(match.group(1).replace(',', ''))
+            suffix = match.group(2)
+            if suffix == '억':
+                value *= 100_000_000
+            elif suffix == '만':
+                value *= 10_000
+            return value
+        except ValueError:
+            pass
+
+    # 3순위: M/K 접미사 (예: "$2.88M", "2.88M")
+    mk_pattern = r'\$?([\d,]+(?:\.\d+)?)\s*([MKmk])\b'
+    match = re.search(mk_pattern, text)
+    if match:
+        try:
+            value = float(match.group(1).replace(',', ''))
+            suffix = match.group(2).upper()
+            if suffix == 'M':
+                value *= 1_000_000
+            elif suffix == 'K':
+                value *= 1_000
+            return value
+        except ValueError:
+            pass
+
+    # 4순위: 일반 금액 (예: "₩14,563,862", "$1,234,567")
+    # "합계: ₩14,563,862" 또는 "**합계**: $14,563,862" 패턴
+    amount_patterns = [
+        r'합계[:\s]*[₩\$]?\s*([\d,]+(?:\.\d+)?)\s*원?',     # 합계: ₩14,563,862
+        r'총[액\s]*[:\s]*[₩\$]?\s*([\d,]+(?:\.\d+)?)\s*원?', # 총액: 14,563,862원
+        r'[₩\$]\s*([\d,]+(?:\.\d+)?)',                       # ₩14,563,862 or $14,563,862
+        r'([\d,]+(?:\.\d+)?)\s*원',                          # 14,563,862원
+    ]
+    for pattern in amount_patterns:
+        match = re.search(pattern, text)
+        if match:
+            try:
+                return float(match.group(1).replace(',', ''))
+            except ValueError:
+                continue
+
+    return None
+
+
+def _extract_aggregation_context(history: List["ChatMessageItem"], result_index: int) -> str:
+    """
+    집계 결과의 컨텍스트 추출 (이전 사용자 메시지에서)
+
+    Args:
+        history: 대화 이력
+        result_index: 집계 결과 메시지의 인덱스
+
+    Returns:
+        컨텍스트 문자열 (예: "도서 관련 결제 합계")
+    """
+    # 결과 인덱스 이전의 가장 가까운 사용자 메시지 찾기
+    for i in range(result_index - 1, -1, -1):
+        if i < len(history) and history[i].role == "user":
+            user_message = history[i].content
+            # 메시지가 너무 길면 앞부분만 사용
+            if len(user_message) > 50:
+                return user_message[:50] + "..."
+            return user_message
+
+    return "이전 조회 결과"
+
+
+def is_arithmetic_request(message: str) -> bool:
+    """
+    사용자 메시지가 산술 연산 요청인지 감지
+
+    이전 집계 결과에 대한 수수료, VAT, 비율 계산 등을 요청하는지 확인합니다.
+
+    Args:
+        message: 사용자 메시지
+
+    Returns:
+        산술 연산 요청이면 True
+    """
+    for pattern in ARITHMETIC_REQUEST_PATTERNS:
+        if re.search(pattern, message, re.IGNORECASE):
+            logger.info(f"[is_arithmetic_request] Matched pattern: {pattern}")
+            return True
+    return False

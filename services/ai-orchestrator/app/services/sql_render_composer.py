@@ -326,6 +326,400 @@ def _generate_insight(
 
 
 # ============================================
+# Summary Stats 생성 (차트 유형별 동적 통계)
+# ============================================
+
+def _calculate_extended_stats(
+    data: List[Dict[str, Any]],
+    x_key: str,
+    y_key: str,
+    chart_type: str
+) -> Dict[str, Any]:
+    """차트 유형에 맞는 확장 통계 계산
+
+    Args:
+        data: 차트 데이터
+        x_key: X축 필드 키
+        y_key: Y축 필드 키
+        chart_type: 차트 타입 (line, bar, pie)
+
+    Returns:
+        확장 통계 딕셔너리
+    """
+    if not data:
+        return {}
+
+    # 기본 통계
+    values = []
+    for row in data:
+        val = row.get(y_key, 0)
+        if isinstance(val, (int, float)):
+            values.append(float(val))
+        elif val is not None:
+            try:
+                values.append(float(val))
+            except (ValueError, TypeError):
+                pass
+
+    if not values:
+        return {}
+
+    count = len(values)
+    total = sum(values)
+    avg = total / count if count > 0 else 0
+    max_val = max(values)
+    min_val = min(values)
+
+    # 최대/최소 인덱스 및 카테고리
+    max_idx = values.index(max_val)
+    min_idx = values.index(min_val)
+    max_category = str(data[max_idx].get(x_key, ""))
+    min_category = str(data[min_idx].get(x_key, ""))
+
+    stats = {
+        "count": count,
+        "total": total,
+        "avg": avg,
+        "max": max_val,
+        "min": min_val,
+        "max_category": max_category,
+        "min_category": min_category,
+        "max_idx": max_idx,
+        "min_idx": min_idx,
+    }
+
+    # 차트 유형별 확장 통계
+    if chart_type == "pie":
+        # 파이 차트: 비율 계산
+        if total > 0:
+            max_share = (max_val / total) * 100
+            min_share = (min_val / total) * 100
+            stats["max_share"] = max_share
+            stats["min_share"] = min_share
+            # 집중도 (상위 N개가 차지하는 비율)
+            sorted_values = sorted(values, reverse=True)
+            top_3_sum = sum(sorted_values[:3]) if len(sorted_values) >= 3 else sum(sorted_values)
+            stats["concentration"] = (top_3_sum / total) * 100
+
+    elif chart_type == "line":
+        # 라인 차트: 추세, 변동성
+        if len(values) >= 2:
+            # 추세 계산 (전반부 vs 후반부)
+            mid = len(values) // 2
+            first_half_avg = sum(values[:mid]) / mid if mid > 0 else 0
+            second_half_avg = sum(values[mid:]) / (len(values) - mid)
+
+            if first_half_avg > 0:
+                growth_rate = ((second_half_avg - first_half_avg) / first_half_avg) * 100
+            else:
+                growth_rate = 100 if second_half_avg > 0 else 0
+
+            stats["growth_rate"] = growth_rate
+            stats["trend"] = "증가" if growth_rate > 10 else ("감소" if growth_rate < -10 else "유지")
+
+            # 변동성 (표준편차)
+            variance = sum((v - avg) ** 2 for v in values) / count
+            std_dev = variance ** 0.5
+            stats["volatility"] = std_dev
+            stats["cv"] = (std_dev / avg * 100) if avg > 0 else 0  # 변동계수
+
+            # 피크 시점
+            stats["peak_time"] = max_category
+
+            # 기간 정보
+            if count > 1:
+                stats["period_start"] = str(data[0].get(x_key, ""))
+                stats["period_end"] = str(data[-1].get(x_key, ""))
+
+    elif chart_type == "bar":
+        # 바 차트: 범위, 평균 대비 비교
+        range_val = max_val - min_val
+        stats["range"] = range_val
+
+        # 최대값이 평균의 몇 배인지
+        if avg > 0:
+            stats["max_vs_avg"] = max_val / avg
+        else:
+            stats["max_vs_avg"] = 0
+
+    return stats
+
+
+def _generate_rule_based_stats(
+    stats: Dict[str, Any],
+    chart_type: str,
+    x_key: str,
+    y_key: str
+) -> Dict[str, Any]:
+    """규칙 기반 Summary Stats 생성 (폴백)
+
+    Args:
+        stats: 확장 통계 딕셔너리
+        chart_type: 차트 타입
+        x_key: X축 키
+        y_key: Y축 키
+
+    Returns:
+        summaryStats 구조
+    """
+    if not stats:
+        return {"items": [], "source": "fallback"}
+
+    items = []
+
+    # 금액 포맷팅 함수
+    def fmt_currency(val: float) -> str:
+        if val >= 100000000:  # 억 단위
+            return f"₩{val/100000000:.1f}억"
+        elif val >= 10000:  # 만 단위
+            return f"₩{val/10000:.0f}만"
+        return f"₩{int(val):,}"
+
+    def fmt_percent(val: float) -> str:
+        return f"{val:.1f}%"
+
+    # 차트 유형별 항목 구성
+    if chart_type == "pie":
+        # 파이 차트: 최대 비중, 최소 비중, 총합, 항목 수, 집중도
+        items = [
+            {
+                "key": "max_share",
+                "label": "최대 비중",
+                "value": f"{stats.get('max_category', '')} ({fmt_percent(stats.get('max_share', 0))})",
+                "type": "text",
+                "highlight": True,
+                "icon": "emoji_events"
+            },
+            {
+                "key": "min_share",
+                "label": "최소 비중",
+                "value": f"{stats.get('min_category', '')} ({fmt_percent(stats.get('min_share', 0))})",
+                "type": "text",
+                "icon": "trending_down"
+            },
+            {
+                "key": "total",
+                "label": "총합",
+                "value": stats.get("total", 0),
+                "type": "currency",
+                "icon": "functions"
+            },
+            {
+                "key": "count",
+                "label": "항목 수",
+                "value": stats.get("count", 0),
+                "type": "number",
+                "icon": "format_list_numbered"
+            },
+            {
+                "key": "concentration",
+                "label": "상위 3개 집중도",
+                "value": fmt_percent(stats.get("concentration", 0)),
+                "type": "percentage",
+                "icon": "donut_large"
+            }
+        ]
+
+    elif chart_type == "line":
+        # 라인 차트: 추세, 피크 시점, 변동성, 기간, 성장률
+        trend = stats.get("trend", "유지")
+        trend_icon = "trending_up" if trend == "증가" else ("trending_down" if trend == "감소" else "trending_flat")
+
+        items = [
+            {
+                "key": "trend",
+                "label": "전체 추세",
+                "value": trend,
+                "type": "trend",
+                "highlight": True,
+                "icon": trend_icon
+            },
+            {
+                "key": "peak_time",
+                "label": "피크 시점",
+                "value": f"{stats.get('peak_time', '')} ({fmt_currency(stats.get('max', 0))})",
+                "type": "text",
+                "icon": "show_chart"
+            },
+            {
+                "key": "growth_rate",
+                "label": "성장률",
+                "value": fmt_percent(stats.get("growth_rate", 0)),
+                "type": "percentage",
+                "icon": "speed"
+            },
+            {
+                "key": "period",
+                "label": "기간",
+                "value": f"{stats.get('period_start', '')} ~ {stats.get('period_end', '')}",
+                "type": "text",
+                "icon": "date_range"
+            },
+            {
+                "key": "avg",
+                "label": "평균",
+                "value": stats.get("avg", 0),
+                "type": "currency",
+                "icon": "calculate"
+            }
+        ]
+
+    elif chart_type == "bar":
+        # 바 차트: 1위, 최하위, 평균, 범위, 평균 대비
+        max_vs_avg = stats.get("max_vs_avg", 0)
+        max_vs_avg_text = f"평균의 {max_vs_avg:.1f}배" if max_vs_avg > 0 else "-"
+
+        items = [
+            {
+                "key": "rank_1",
+                "label": "1위",
+                "value": f"{stats.get('max_category', '')} ({fmt_currency(stats.get('max', 0))})",
+                "type": "text",
+                "highlight": True,
+                "icon": "emoji_events"
+            },
+            {
+                "key": "rank_last",
+                "label": "최하위",
+                "value": f"{stats.get('min_category', '')} ({fmt_currency(stats.get('min', 0))})",
+                "type": "text",
+                "icon": "trending_down"
+            },
+            {
+                "key": "avg",
+                "label": "평균",
+                "value": stats.get("avg", 0),
+                "type": "currency",
+                "icon": "calculate"
+            },
+            {
+                "key": "range",
+                "label": "범위",
+                "value": fmt_currency(stats.get("range", 0)),
+                "type": "currency",
+                "icon": "unfold_more"
+            },
+            {
+                "key": "max_vs_avg",
+                "label": "1위 vs 평균",
+                "value": max_vs_avg_text,
+                "type": "text",
+                "icon": "compare_arrows"
+            }
+        ]
+
+    return {"items": items, "source": "rule"}
+
+
+def _apply_stats_template(
+    template: List[Dict[str, Any]],
+    stats: Dict[str, Any]
+) -> Dict[str, Any]:
+    """LLM 템플릿의 플레이스홀더를 실제 값으로 치환
+
+    Args:
+        template: LLM이 생성한 summaryStatsTemplate
+        stats: 확장 통계 딕셔너리
+
+    Returns:
+        완성된 summaryStats 구조
+    """
+    import re
+
+    if not template or not stats:
+        return {"items": [], "source": "llm"}
+
+    # 플레이스홀더 매핑
+    placeholders = {
+        "{count}": str(stats.get("count", "")),
+        "{total}": f"₩{int(stats.get('total', 0)):,}" if stats.get("total") else "",
+        "{avg}": f"₩{int(stats.get('avg', 0)):,}" if stats.get("avg") else "",
+        "{max}": f"₩{int(stats.get('max', 0)):,}" if stats.get("max") else "",
+        "{min}": f"₩{int(stats.get('min', 0)):,}" if stats.get("min") else "",
+        "{maxCategory}": str(stats.get("max_category", "")),
+        "{minCategory}": str(stats.get("min_category", "")),
+        "{maxShare}": f"{stats.get('max_share', 0):.1f}%" if stats.get("max_share") else "",
+        "{minShare}": f"{stats.get('min_share', 0):.1f}%" if stats.get("min_share") else "",
+        "{concentration}": f"{stats.get('concentration', 0):.1f}%" if stats.get("concentration") else "",
+        "{trend}": str(stats.get("trend", "")),
+        "{growthRate}": f"{stats.get('growth_rate', 0):.1f}%" if stats.get("growth_rate") else "",
+        "{peakTime}": str(stats.get("peak_time", "")),
+        "{periodStart}": str(stats.get("period_start", "")),
+        "{periodEnd}": str(stats.get("period_end", "")),
+        "{range}": f"₩{int(stats.get('range', 0)):,}" if stats.get("range") else "",
+        "{maxVsAvg}": f"{stats.get('max_vs_avg', 0):.1f}배" if stats.get("max_vs_avg") else "",
+    }
+
+    def substitute(text: str) -> str:
+        if not isinstance(text, str):
+            return text
+        result = text
+        for placeholder, value in placeholders.items():
+            result = result.replace(placeholder, value)
+        # 미치환 플레이스홀더 제거
+        result = re.sub(r'\{[^}]+\}', '', result)
+        return result.strip()
+
+    items = []
+    for item in template:
+        new_item = {
+            "key": item.get("key", ""),
+            "label": item.get("label", ""),
+            "value": substitute(str(item.get("value", ""))),
+            "type": item.get("type", "text"),
+        }
+        if item.get("highlight"):
+            new_item["highlight"] = True
+        if item.get("icon"):
+            new_item["icon"] = item.get("icon")
+        items.append(new_item)
+
+    return {"items": items, "source": "llm"}
+
+
+def _generate_summary_stats(
+    data: List[Dict[str, Any]],
+    x_key: str,
+    y_key: str,
+    chart_type: str,
+    template: Optional[List[Dict[str, Any]]] = None
+) -> Dict[str, Any]:
+    """차트 데이터에 대한 Summary Stats 생성
+
+    LLM 템플릿 우선, 규칙 기반 폴백
+
+    Args:
+        data: 차트 데이터
+        x_key: X축 필드 키
+        y_key: Y축 필드 키
+        chart_type: 차트 타입 (line, bar, pie)
+        template: LLM이 생성한 summaryStatsTemplate (선택적)
+
+    Returns:
+        summaryStats 구조
+    """
+    if not data:
+        return {"items": [], "source": "fallback"}
+
+    # 확장 통계 계산
+    stats = _calculate_extended_stats(data, x_key, y_key, chart_type)
+
+    if not stats:
+        return {"items": [], "source": "fallback"}
+
+    # LLM 템플릿이 있으면 적용
+    if template and isinstance(template, list) and len(template) > 0:
+        result = _apply_stats_template(template, stats)
+        logger.info(f"[SummaryStats] Generated from LLM template: {len(result.get('items', []))} items")
+        return result
+
+    # 폴백: 규칙 기반 생성
+    result = _generate_rule_based_stats(stats, chart_type, x_key, y_key)
+    logger.info(f"[SummaryStats] Generated from rules: {len(result.get('items', []))} items")
+    return result
+
+
+# ============================================
 # 차트 RenderSpec 구성
 # ============================================
 
@@ -333,7 +727,8 @@ def _compose_chart_render_spec(
     result: Dict[str, Any],
     question: str,
     llm_chart_type: Optional[str] = None,
-    insight_template: Optional[str] = None
+    insight_template: Optional[str] = None,
+    summary_stats_template: Optional[List[Dict[str, Any]]] = None
 ) -> Dict[str, Any]:
     """차트 타입의 RenderSpec 구성
 
@@ -342,9 +737,10 @@ def _compose_chart_render_spec(
         question: 사용자 질문
         llm_chart_type: LLM이 추천한 차트 타입 (우선 사용)
         insight_template: LLM이 생성한 인사이트 템플릿 (선택적)
+        summary_stats_template: LLM이 생성한 summaryStats 템플릿 (선택적)
 
     Returns:
-        차트 타입 RenderSpec (insight 필드 포함)
+        차트 타입 RenderSpec (insight, summaryStats 필드 포함)
     """
     from datetime import datetime
 
@@ -444,6 +840,16 @@ def _compose_chart_render_spec(
         template=insight_template
     )
     render_spec["chart"]["insight"] = insight
+
+    # Summary Stats 생성 및 추가
+    summary_stats = _generate_summary_stats(
+        data=data,
+        x_key=x_key,
+        y_key=y_key,
+        chart_type=chart_type,
+        template=summary_stats_template
+    )
+    render_spec["chart"]["summaryStats"] = summary_stats
 
     return render_spec
 
@@ -617,7 +1023,8 @@ def compose_sql_render_spec(
     result: Dict[str, Any],
     question: str,
     llm_chart_type: Optional[str] = None,
-    insight_template: Optional[str] = None
+    insight_template: Optional[str] = None,
+    summary_stats_template: Optional[List[Dict[str, Any]]] = None
 ) -> Dict[str, Any]:
     """SQL 실행 결과를 RenderSpec으로 변환
 
@@ -630,6 +1037,7 @@ def compose_sql_render_spec(
         question: 사용자 질문
         llm_chart_type: LLM이 추천한 차트 타입 (선택적)
         insight_template: LLM이 생성한 인사이트 템플릿 (선택적)
+        summary_stats_template: LLM이 생성한 summaryStats 템플릿 (선택적)
     """
     # TC-001: 차트 렌더링 타입 감지
     # LLM이 유효한 차트 타입을 추천했으면 차트로 렌더링
@@ -638,11 +1046,11 @@ def compose_sql_render_spec(
     # LLM 차트 타입이 유효하면(none이 아니면) 차트 요청으로 처리
     if llm_chart_type and llm_chart_type in ["line", "bar", "pie"]:
         logger.info(f"[compose_sql_render_spec] LLM chart type detected: {llm_chart_type}")
-        return _compose_chart_render_spec(result, question, llm_chart_type, insight_template)
+        return _compose_chart_render_spec(result, question, llm_chart_type, insight_template, summary_stats_template)
 
     # 메시지에서 차트 키워드 감지
     if render_type == "chart":
-        return _compose_chart_render_spec(result, question, llm_chart_type, insight_template)
+        return _compose_chart_render_spec(result, question, llm_chart_type, insight_template, summary_stats_template)
 
     data = result.get("data", [])
     row_count = result.get("rowCount", 0)
