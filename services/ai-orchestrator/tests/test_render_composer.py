@@ -312,34 +312,36 @@ class TestRenderTypeDetection:
         )
         assert spec["type"] == "table", "부정 표현 '차트 대신 테이블로'가 table로 인식되어야 함"
 
-    def test_implicit_keywords_default_to_table(self):
+    def test_implicit_keywords_render_as_chart(self):
         """
-        암시적 키워드 테스트 - 비율: "비율 알려줘" -> table (기본값)
-        '비율', '점유율', '분포' 등의 키워드는 명시적 차트 요청이 아니므로 테이블로 표시
+        암시적 키워드 테스트 - 비율/분포: "비율 알려줘" -> chart (pie)
+        '비율', '점유율', '분포' 등의 키워드는 시각화 의도가 있으므로 차트로 표시
 
-        사용자 피드백: "보고용 자료는 표가 좋다"
-        "그래프로 보여줘"라고 명시적으로 요청할 때만 차트 사용
+        E2E 시나리오: 사용자가 "상태별 비율"이라고 하면 pie chart 기대
+        테이블을 원하면 "표로 보여줘"라고 명시적으로 요청
         """
         spec = self.composer.compose(
             self.aggregate_result,
             self.aggregate_plan,
             "상태별 비율 알려줘"
         )
-        assert spec["type"] == "table", "암시적 키워드 '비율'은 table이 기본"
+        assert spec["type"] == "chart", "암시적 키워드 '비율'은 chart로 렌더링"
+        assert spec["chart"]["chartType"] == "pie", "비율 키워드는 pie chart"
 
         spec = self.composer.compose(
             self.aggregate_result,
             self.aggregate_plan,
             "결제 분포 보여줘"
         )
-        assert spec["type"] == "table", "암시적 키워드 '분포'도 table이 기본"
+        assert spec["type"] == "chart", "암시적 키워드 '분포'도 chart로 렌더링"
 
-    def test_trend_keywords_default_to_table(self):
+    def test_trend_keywords_render_as_line_chart(self):
         """
-        추이 키워드 테스트 - 추이: "추이 보여줘" -> table (기본값)
-        '추이', '추세', '변화' 등의 키워드는 명시적 차트 요청이 아니므로 테이블로 표시
+        추이 키워드 테스트 - 추이: "추이 보여줘" -> chart (line)
+        '추이', '추세', '변화' 등의 키워드는 시계열 시각화 의도가 있으므로 line chart로 표시
 
-        사용자 피드백: "추이만 있으면 테이블, 그래프로 보여줘라고 할 때만 차트"
+        E2E 시나리오: 사용자가 "결제 추이"라고 하면 line chart 기대
+        테이블을 원하면 "표로 보여줘"라고 명시적으로 요청
         """
         # 시계열 데이터용 결과
         time_series_result = {
@@ -360,20 +362,21 @@ class TestRenderTypeDetection:
             "timeRange": {"start": "2024-01-01", "end": "2024-01-03"}
         }
 
-        # 암시적 키워드만 있으면 테이블
+        # 암시적 키워드로 차트 렌더링
         spec = self.composer.compose(
             time_series_result,
             time_series_plan,
             "최근 결제 추이 보여줘"
         )
-        assert spec["type"] == "table", "암시적 키워드 '추이'만 있으면 table이 기본"
+        assert spec["type"] == "chart", "암시적 키워드 '추이'는 chart로 렌더링"
+        assert spec["chart"]["chartType"] == "line", "추이 키워드 + 시계열 데이터는 line chart"
 
         spec = self.composer.compose(
             time_series_result,
             time_series_plan,
             "결제 추세 분석해줘"
         )
-        assert spec["type"] == "table", "암시적 키워드 '추세'만 있으면 table이 기본"
+        assert spec["type"] == "chart", "암시적 키워드 '추세'는 chart로 렌더링"
 
     def test_explicit_chart_with_trend(self):
         """
