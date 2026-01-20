@@ -17,6 +17,7 @@ const Sidebar: React.FC = () => {
   const toggleSidebar = useUIStore((state) => state.toggleSidebar)
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
   const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null)
+  const [searchTerm, setSearchTerm] = useState('')
   const userMenuRef = useRef<HTMLDivElement>(null)
 
   // Close menu when clicking outside
@@ -62,20 +63,29 @@ const Sidebar: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [toggleSidebar])
 
+  const filteredSessions = React.useMemo(() => {
+    if (!searchTerm) {
+      return sessions
+    }
+    return sessions.filter((session) =>
+      session.title.toLowerCase().includes(searchTerm.toLowerCase())
+    )
+  }, [sessions, searchTerm])
+
   const groupedSessions = React.useMemo(() => {
-    const groups: Record<SessionCategory, typeof sessions> = {
+    const groups: Record<SessionCategory, typeof filteredSessions> = {
       today: [],
       yesterday: [],
       previous7days: [],
       older: [],
     }
 
-    sessions.forEach((session) => {
+    filteredSessions.forEach((session) => {
       groups[session.category].push(session)
     })
 
     return groups
-  }, [sessions])
+  }, [filteredSessions])
 
   return (
     <aside className={`h-full shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out ${sidebarCollapsed ? 'w-0' : 'w-72'}`}>
@@ -107,8 +117,35 @@ const Sidebar: React.FC = () => {
           </button>
         </div>
 
+        {/* Search Input */}
+        <div className="px-4 py-2">
+          <div className="relative flex items-center">
+            <input
+              type="text"
+              placeholder="히스토리 검색"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-stone-200/70 border-0 rounded-lg pl-3 pr-8 py-2 text-sm text-stone-700 placeholder-stone-500 focus:ring-1 focus:ring-blue-500 focus:bg-white transition-colors"
+            />
+            {searchTerm ? (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="absolute right-2 p-1 text-stone-400 hover:text-stone-600"
+              >
+                <Icon name={ICONS.CLOSE} size="sm" />
+              </button>
+            ) : (
+              <Icon
+                name={ICONS.SEARCH}
+                className="absolute right-3 pointer-events-none text-stone-400"
+                size="sm"
+              />
+            )}
+          </div>
+        </div>
+
         {/* Session History */}
-        <div className="flex-1 overflow-y-auto px-2 py-4">
+        <div className="flex-1 overflow-y-auto px-4 py-2">
           {(['today', 'yesterday', 'previous7days', 'older'] as SessionCategory[]).map(
             (category) => {
               const categorySessions = groupedSessions[category]
@@ -153,7 +190,7 @@ const Sidebar: React.FC = () => {
                           {isHovered && (
                             <button
                               onClick={(e) => handleDeleteSession(e, session.id)}
-                              className="absolute right-2 p-1 rounded hover:bg-stone-300/50 text-stone-400 hover:text-stone-600 transition-colors"
+                              className="absolute right-2 inset-y-0 flex items-center justify-center p-1 rounded-md text-stone-400 hover:text-stone-600 hover:bg-stone-300/50 transition-colors"
                               title="삭제"
                             >
                               <Icon name={ICONS.CLOSE} className="text-[14px]" />
