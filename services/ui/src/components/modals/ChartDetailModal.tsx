@@ -385,19 +385,27 @@ const ChartDetailModal: React.FC = () => {
                 </div>
                 <div>
                   <h4 className="text-sm font-bold text-slate-800">
-                    Insight: Data Analysis
+                    인사이트: 데이터 분석
+                    {chartConfig.insight?.source === 'llm' && (
+                      <span className="ml-2 text-xs font-normal text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded">
+                        AI 생성
+                      </span>
+                    )}
                   </h4>
                   <p className="text-sm text-slate-600 mt-1 leading-relaxed">
-                    {stats ? (
+                    {chartConfig.insight?.content ? (
+                      // 백엔드에서 생성된 인사이트 사용
+                      chartConfig.insight.content
+                    ) : stats ? (
+                      // 폴백: 프론트엔드 템플릿
                       <>
-                        Total value is{' '}
-                        <strong>{formatNumber(stats.total)}</strong> across{' '}
-                        <strong>{stats.count}</strong> data points. The average
-                        is <strong>{formatNumber(stats.avg, 1)}</strong> with a
-                        peak of <strong>{formatNumber(stats.max)}</strong>.
+                        총 <strong>{stats.count}</strong>개 데이터 포인트의
+                        합계는 <strong>{formatNumber(stats.total)}</strong>입니다.
+                        평균 <strong>{formatNumber(stats.avg, 1)}</strong>,
+                        최대값 <strong>{formatNumber(stats.max)}</strong>입니다.
                       </>
                     ) : (
-                      'No data available for analysis.'
+                      '분석할 데이터가 없습니다.'
                     )}
                   </p>
                 </div>

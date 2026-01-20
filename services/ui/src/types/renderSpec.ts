@@ -109,6 +109,12 @@ export interface ChartSeries {
   type?: SeriesType
 }
 
+// AI-generated insight for chart data
+export interface InsightConfig {
+  content: string | null
+  source: 'llm' | 'template' | 'none'
+}
+
 export interface ChartConfig {
   chartType: ChartType
   dataRef?: string
@@ -117,6 +123,7 @@ export interface ChartConfig {
   series?: ChartSeries[]
   legend?: boolean
   tooltip?: boolean
+  insight?: InsightConfig  // AI가 생성한 인사이트
 }
 
 export interface ChartRenderSpec extends BaseRenderSpec {

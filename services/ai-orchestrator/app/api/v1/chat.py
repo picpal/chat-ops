@@ -1510,7 +1510,15 @@ async def handle_text_to_sql(
 
         if result["success"]:
             # 성공: 데이터를 RenderSpec으로 변환
-            render_spec = compose_sql_render_spec(result, request.message)
+            # LLM 추천 차트 타입 및 인사이트 템플릿 추출
+            llm_chart_type = result.get("llmChartType")
+            insight_template = result.get("insightTemplate")
+            if llm_chart_type:
+                logger.info(f"[{request_id}] LLM chart type: {llm_chart_type}")
+            if insight_template:
+                logger.info(f"[{request_id}] LLM insight template: {insight_template[:50]}...")
+
+            render_spec = compose_sql_render_spec(result, request.message, llm_chart_type, insight_template)
 
             # 집계 쿼리 메타데이터 추가
             is_aggregation = result.get("isAggregation", False)
@@ -1703,33 +1711,63 @@ def _detect_render_type_from_message(message: str) -> Optional[str]:
     return None
 
 
-def _detect_chart_type(data: List[Dict[str, Any]], columns: List[str]) -> str:
-    """데이터 구조를 분석하여 적절한 차트 타입 결정
+def _detect_chart_type(data: List[Dict[str, Any]], columns: List[str], user_message: str = "") -> str:
+    """데이터 구조를 분석하여 적절한 차트 타입 결정 (폴백 로직)
+
+    LLM 기반 차트 타입 결정 실패 시 사용되는 규칙 기반 폴백 로직.
+    사용자 메시지의 키워드와 데이터 구조를 분석하여 차트 타입 결정.
 
     Args:
         data: 쿼리 결과 데이터
         columns: 컬럼 목록
+        user_message: 사용자 질문 (키워드 분석용)
 
     Returns:
         "bar" | "line" | "pie"
     """
+    # render_keywords에서 import된 상수 사용
+    from app.constants.render_keywords import CHART_TYPE_KEYWORDS, DATE_FIELDS
+
     if not data or not columns:
         return "bar"
 
-    # 시계열 데이터 감지 (날짜/시간 필드가 있는 경우)
+    message_lower = user_message.lower()
+
+    # 시계열 컬럼 감지 (DATE_FIELDS 상수 사용 - camelCase, snake_case 모두 지원)
     has_time_column = any(
-        any(kw in col.lower() for kw in TIME_FIELD_KEYWORDS)
+        col.lower() in [f.lower() for f in DATE_FIELDS]
+        or any(kw in col.lower() for kw in TIME_FIELD_KEYWORDS)
         for col in columns
     )
 
-    if has_time_column and len(data) > 2:
+    # line 키워드 체크 (추이, 변화, 트렌드 등)
+    line_keywords = CHART_TYPE_KEYWORDS.get("line", [])
+    has_line_keyword = any(kw in message_lower for kw in line_keywords)
+
+    # 시계열 + line 키워드 → line (데이터 행 수와 무관)
+    if has_time_column and has_line_keyword:
+        logger.info(f"[ChartType Fallback] time_column + line_keyword → line")
         return "line"
 
+    # 시계열 + 2행 이상 → line (기존 임계값 완화: >2 → >=2)
+    if has_time_column and len(data) >= 2:
+        logger.info(f"[ChartType Fallback] time_column + data>=2 → line")
+        return "line"
+
+    # pie 키워드 → pie (10행 이하일 때만)
+    pie_keywords = CHART_TYPE_KEYWORDS.get("pie", [])
+    if any(kw in message_lower for kw in pie_keywords) and len(data) <= 10:
+        logger.info(f"[ChartType Fallback] pie_keyword + data<=10 → pie")
+        return "pie"
+
     # 카테고리가 적고 (5개 이하) 단일 값 컬럼이면 pie 차트
-    if len(data) <= 5 and len(columns) == 2:
+    # 단, line 키워드가 없는 경우에만
+    if len(data) <= 5 and len(columns) == 2 and not has_line_keyword:
+        logger.info(f"[ChartType Fallback] small_data + 2_cols + no_line_keyword → pie")
         return "pie"
 
     # 기본은 bar 차트
+    logger.info(f"[ChartType Fallback] default → bar")
     return "bar"
 
 
@@ -1769,15 +1807,193 @@ def _identify_axis_keys(data: List[Dict[str, Any]], columns: List[str]) -> Tuple
     return (x_key, y_key)
 
 
-def _compose_chart_render_spec(result: Dict[str, Any], question: str) -> Dict[str, Any]:
+def _detect_trend(values: List[float]) -> Optional[str]:
+    """시계열 데이터의 추세 감지
+
+    Args:
+        values: Y축 값 리스트 (시간 순서대로)
+
+    Returns:
+        "증가" | "감소" | "유지" | None (데이터 부족시)
+    """
+    if len(values) < 3:
+        return None
+
+    # 전반부와 후반부의 평균 비교
+    mid = len(values) // 2
+    first_half = sum(values[:mid]) / mid
+    second_half = sum(values[mid:]) / (len(values) - mid)
+
+    if first_half == 0:
+        return "증가" if second_half > 0 else "유지"
+
+    diff_ratio = (second_half - first_half) / first_half
+
+    if diff_ratio > 0.1:
+        return "증가"
+    elif diff_ratio < -0.1:
+        return "감소"
+    return "유지"
+
+
+def _generate_insight(
+    data: List[Dict[str, Any]],
+    x_key: str,
+    y_key: str,
+    chart_type: str,
+    template: Optional[str] = None
+) -> Dict[str, Any]:
+    """차트 데이터에 대한 인사이트 생성 (LLM 템플릿 우선, 규칙 기반 폴백)
+
+    Args:
+        data: 차트 데이터
+        x_key: X축 필드 키
+        y_key: Y축 필드 키
+        chart_type: 차트 타입 (line, bar, pie)
+        template: LLM이 생성한 인사이트 템플릿 (선택적)
+
+    Returns:
+        {
+            "content": "인사이트 텍스트",
+            "source": "llm" | "template" | "none"
+        }
+    """
+    if not data:
+        return {"content": None, "source": "none"}
+
+    # 숫자 값 추출
+    values = []
+    for row in data:
+        val = row.get(y_key, 0)
+        if isinstance(val, (int, float)):
+            values.append(float(val))
+        elif val is not None:
+            try:
+                values.append(float(val))
+            except (ValueError, TypeError):
+                values.append(0)
+
+    if not values:
+        return {"content": None, "source": "none"}
+
+    # 통계 계산
+    count = len(data)
+    total = sum(values)
+    avg = total / count if count > 0 else 0
+    max_val = max(values)
+    min_val = min(values)
+
+    # 최대/최소 카테고리 찾기
+    max_idx = values.index(max_val)
+    min_idx = values.index(min_val)
+    max_category = str(data[max_idx].get(x_key, ""))
+    min_category = str(data[min_idx].get(x_key, ""))
+
+    # 추세 감지 (line 차트에서만)
+    trend = _detect_trend(values) if chart_type == "line" else None
+
+    # 필드 라벨 매핑 (snake_case → 한글)
+    FIELD_LABELS = {
+        "month": "월",
+        "date": "일",
+        "week": "주",
+        "year": "연도",
+        "day": "일",
+        "merchant_id": "가맹점",
+        "status": "상태",
+        "method": "결제수단",
+        "amount": "금액",
+        "total_amount": "매출",
+        "sum_amount": "총금액",
+        "count": "건수",
+        "payment_count": "결제건수",
+        "refund_count": "환불건수",
+        "avg_amount": "평균금액",
+        "net_amount": "정산금액",
+        "total": "합계",
+        "avg": "평균",
+    }
+
+    # 필드 라벨 추출 (snake_case, camelCase 모두 지원)
+    def get_field_label(key: str) -> str:
+        key_lower = key.lower()
+        if key_lower in FIELD_LABELS:
+            return FIELD_LABELS[key_lower]
+        # snake_case 처리
+        parts = key.split('_')
+        for part in parts:
+            if part.lower() in FIELD_LABELS:
+                return FIELD_LABELS[part.lower()]
+        # 기본값: 그대로 반환
+        return key.replace('_', ' ').title()
+
+    group_by_label = get_field_label(x_key)
+    metric_label = get_field_label(y_key)
+
+    # 금액 포맷팅 함수
+    def format_currency(val: float) -> str:
+        if val >= 1000:
+            return f"₩{int(val):,}"
+        return f"{val:,.1f}"
+
+    # 플레이스홀더 값 구성
+    placeholders = {
+        "{count}": f"{count:,}",
+        "{total}": format_currency(total),
+        "{avg}": format_currency(avg),
+        "{max}": format_currency(max_val),
+        "{min}": format_currency(min_val),
+        "{maxCategory}": max_category,
+        "{minCategory}": min_category,
+        "{trend}": trend or "",
+        "{groupBy}": group_by_label,
+        "{metric}": metric_label,
+    }
+
+    # LLM 템플릿이 있으면 플레이스홀더 치환
+    if template:
+        content = template
+        for placeholder, value in placeholders.items():
+            content = content.replace(placeholder, value)
+
+        # 미치환 플레이스홀더 제거 (중괄호로 시작하는 항목)
+        import re
+        content = re.sub(r'\{[^}]+\}', '', content)
+        content = re.sub(r'\s+', ' ', content).strip()
+
+        logger.info(f"[Insight] Generated from LLM template: {content[:100]}...")
+        return {"content": content, "source": "llm"}
+
+    # 폴백: 규칙 기반 템플릿
+    if chart_type == "line":
+        content = f"{group_by_label}별 {metric_label} 추이입니다. 총 {count:,}개 데이터의 합계는 {format_currency(total)}입니다."
+        if trend:
+            content += f" 전반적으로 {trend} 추세입니다."
+    elif chart_type == "pie":
+        content = f"{group_by_label}별 {metric_label} 분포입니다. {max_category}가 가장 큰 비중을 차지합니다."
+    else:  # bar
+        content = f"{group_by_label}별 {metric_label} 비교입니다. {max_category}가 {format_currency(max_val)}로 가장 높습니다."
+
+    logger.info(f"[Insight] Generated from rule-based template: {content[:100]}...")
+    return {"content": content, "source": "template"}
+
+
+def _compose_chart_render_spec(
+    result: Dict[str, Any],
+    question: str,
+    llm_chart_type: Optional[str] = None,
+    insight_template: Optional[str] = None
+) -> Dict[str, Any]:
     """차트 타입의 RenderSpec 구성
 
     Args:
         result: SQL 실행 결과
         question: 사용자 질문
+        llm_chart_type: LLM이 추천한 차트 타입 (우선 사용)
+        insight_template: LLM이 생성한 인사이트 템플릿 (선택적)
 
     Returns:
-        차트 타입 RenderSpec
+        차트 타입 RenderSpec (insight 필드 포함)
     """
     data = result.get("data", [])
     row_count = result.get("rowCount", 0)
@@ -1798,7 +2014,16 @@ def _compose_chart_render_spec(result: Dict[str, Any], question: str) -> Dict[st
         }
 
     columns = list(data[0].keys())
-    chart_type = _detect_chart_type(data, columns)
+
+    # LLM 추천 차트 타입 우선 사용, 없으면 규칙 기반 폴백
+    if llm_chart_type and llm_chart_type in ["line", "bar", "pie"]:
+        chart_type = llm_chart_type
+        logger.info(f"[ChartType] Using LLM recommendation: {chart_type}")
+    else:
+        # 폴백: 규칙 기반 로직 (개선 버전 - user_message 전달)
+        chart_type = _detect_chart_type(data, columns, question)
+        logger.info(f"[ChartType] Fallback to rule-based: {chart_type}")
+
     x_key, y_key = _identify_axis_keys(data, columns)
 
     # X축 라벨 생성
@@ -1856,6 +2081,16 @@ def _compose_chart_render_spec(result: Dict[str, Any], question: str) -> Dict[st
                 "name": y_label
             }
         ]
+
+    # 인사이트 생성 및 추가
+    insight = _generate_insight(
+        data=data,
+        x_key=x_key,
+        y_key=y_key,
+        chart_type=chart_type,
+        template=insight_template
+    )
+    render_spec["chart"]["insight"] = insight
 
     return render_spec
 
@@ -2017,17 +2252,36 @@ def _format_aggregation_as_markdown_table(
     return "\n".join(lines)
 
 
-def compose_sql_render_spec(result: Dict[str, Any], question: str) -> Dict[str, Any]:
+def compose_sql_render_spec(
+    result: Dict[str, Any],
+    question: str,
+    llm_chart_type: Optional[str] = None,
+    insight_template: Optional[str] = None
+) -> Dict[str, Any]:
     """SQL 실행 결과를 RenderSpec으로 변환
 
     - 차트 요청: 차트 RenderSpec 반환 (TC-001)
     - 1000건 초과: 다운로드 RenderSpec (테이블 표시 안함)
     - 1000건 이하: 미리보기 10건 + 전체보기 모달
+
+    Args:
+        result: SQL 실행 결과
+        question: 사용자 질문
+        llm_chart_type: LLM이 추천한 차트 타입 (선택적)
+        insight_template: LLM이 생성한 인사이트 템플릿 (선택적)
     """
     # TC-001: 차트 렌더링 타입 감지
+    # LLM이 유효한 차트 타입을 추천했으면 차트로 렌더링
     render_type = _detect_render_type_from_message(question)
+
+    # LLM 차트 타입이 유효하면(none이 아니면) 차트 요청으로 처리
+    if llm_chart_type and llm_chart_type in ["line", "bar", "pie"]:
+        logger.info(f"[compose_sql_render_spec] LLM chart type detected: {llm_chart_type}")
+        return _compose_chart_render_spec(result, question, llm_chart_type, insight_template)
+
+    # 메시지에서 차트 키워드 감지
     if render_type == "chart":
-        return _compose_chart_render_spec(result, question)
+        return _compose_chart_render_spec(result, question, llm_chart_type, insight_template)
 
     data = result.get("data", [])
     row_count = result.get("rowCount", 0)

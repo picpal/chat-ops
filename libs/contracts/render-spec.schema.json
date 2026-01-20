@@ -227,6 +227,21 @@
         "tooltip": {
           "type": "boolean",
           "description": "툴팁 표시 여부"
+        },
+        "insight": {
+          "type": "object",
+          "description": "AI가 생성한 차트 인사이트",
+          "properties": {
+            "content": {
+              "type": ["string", "null"],
+              "description": "인사이트 텍스트 (한국어)"
+            },
+            "source": {
+              "type": "string",
+              "description": "인사이트 생성 소스",
+              "enum": ["llm", "template", "none"]
+            }
+          }
         }
       }
     },

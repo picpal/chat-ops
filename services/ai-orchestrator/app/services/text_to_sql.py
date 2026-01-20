@@ -784,8 +784,57 @@ class TextToSqlService:
 - "오늘" → created_at >= '현재날짜'
 - "최근 N개월" → created_at >= NOW() - INTERVAL 'N months'
 
-## 응답 형식
-SQL 쿼리만 반환 (코드 블록, 설명 없이), 세미콜론으로 끝내기
+## 시간 그룹핑 시 포맷팅 (중요!)
+GROUP BY로 시간을 묶을 때, 사용자가 읽기 쉬운 형태로 포맷팅하세요:
+- 월별: TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month
+- 일별: TO_CHAR(DATE_TRUNC('day', created_at), 'YYYY-MM-DD') AS date
+- 주별: TO_CHAR(DATE_TRUNC('week', created_at), 'YYYY-MM-DD') AS week
+- 연별: TO_CHAR(DATE_TRUNC('year', created_at), 'YYYY') AS year
+
+예시:
+- "월별 매출" → SELECT TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month, SUM(amount)...
+- 절대로 DATE_TRUNC만 사용하지 마세요 (전체 timestamp가 반환됨)
+
+## 응답 형식 (JSON)
+반드시 아래 JSON 형식으로만 응답하세요:
+
+```json
+{
+  "sql": "SELECT ... ;",
+  "chartType": "line | bar | pie | none",
+  "chartReason": "판단 근거",
+  "insightTemplate": "한국어 인사이트 템플릿 (chartType이 none이 아닐 때만)"
+}
+```
+
+### chartType 결정 기준:
+- **line**: 시계열 데이터 (날짜/시간 기준 GROUP BY) + 추이/변화/트렌드/일별/월별/주별 키워드
+- **bar**: 카테고리별 비교 (가맹점별, 상태별 등)
+- **pie**: 비율/점유율/분포 키워드 + 적은 카테고리 (≤10개)
+- **none**: 차트 요청 키워드("그래프", "차트", "시각화") 없음 → 테이블로 표시
+
+중요: 사용자가 "그래프", "차트", "시각화" 등을 명시적으로 요청한 경우에만 line/bar/pie 중 하나를 선택하세요.
+그렇지 않으면 chartType은 "none"으로 설정하세요.
+
+### insightTemplate 작성 가이드:
+chartType이 line/bar/pie인 경우에만 작성하세요. 플레이스홀더를 사용하여 템플릿을 작성합니다.
+
+**사용 가능한 플레이스홀더:**
+- {count}: 데이터 포인트 수
+- {total}: Y축 값 합계
+- {avg}: 평균값
+- {max}: 최대값
+- {min}: 최소값
+- {maxCategory}: 최대값을 가진 X축 항목
+- {minCategory}: 최소값을 가진 X축 항목
+- {trend}: 추세 (증가/감소/유지, line 차트에서만)
+- {groupBy}: X축 필드명 (한글)
+- {metric}: Y축 필드명 (한글)
+
+**예시:**
+- 시계열(line): "{groupBy}별 {metric} 추이입니다. 전체 {count}개 기간 동안 {trend} 추세를 보이며, 최고점은 {max}입니다."
+- 비교(bar): "{groupBy}별 {metric} 비교 결과, {maxCategory}가 {max}로 가장 높고, {minCategory}가 {min}로 가장 낮습니다."
+- 분포(pie): "{groupBy}별 {metric} 분포입니다. {maxCategory}가 가장 큰 비중을 차지하며, 총 {count}개 항목이 있습니다."
 """)
 
         # 스키마 정보
@@ -976,11 +1025,64 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
 
         return "\n".join(parts)
 
+    def _parse_llm_response(self, raw_response: str) -> Tuple[str, Optional[str], Optional[str], Optional[str]]:
+        """
+        LLM 응답에서 SQL, 차트 타입, 인사이트 템플릿 추출
+
+        Args:
+            raw_response: LLM 원본 응답
+
+        Returns:
+            (sql, chart_type, chart_reason, insight_template) 튜플
+        """
+        # JSON 블록 추출 시도
+        json_match = re.search(r'```json\s*(.*?)\s*```', raw_response, re.DOTALL)
+        if json_match:
+            try:
+                data = json.loads(json_match.group(1))
+                sql = data.get("sql", "").strip()
+                chart_type = data.get("chartType")
+                chart_reason = data.get("chartReason")
+                insight_template = data.get("insightTemplate")
+                logger.info(f"Parsed JSON response - chartType: {chart_type}, reason: {chart_reason}, insightTemplate: {insight_template is not None}")
+                return (sql, chart_type, chart_reason, insight_template)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse JSON block: {e}")
+
+        # JSON 직접 파싱 시도 (코드 블록 없이 JSON만 반환된 경우)
+        try:
+            data = json.loads(raw_response)
+            sql = data.get("sql", "").strip()
+            chart_type = data.get("chartType")
+            chart_reason = data.get("chartReason")
+            insight_template = data.get("insightTemplate")
+            logger.info(f"Parsed direct JSON - chartType: {chart_type}, reason: {chart_reason}, insightTemplate: {insight_template is not None}")
+            return (sql, chart_type, chart_reason, insight_template)
+        except json.JSONDecodeError:
+            pass
+
+        # 폴백: 기존 방식 (SQL만 추출)
+        logger.warning("Failed to parse JSON response, falling back to SQL-only extraction")
+        sql = raw_response
+        if sql.startswith("```"):
+            lines = sql.split("\n")
+            sql_lines = []
+            in_block = False
+            for line in lines:
+                if line.startswith("```"):
+                    in_block = not in_block
+                    continue
+                if in_block or not line.startswith("```"):
+                    sql_lines.append(line)
+            sql = "\n".join(sql_lines).strip()
+
+        return (sql.strip(), None, None, None)
+
     async def generate_sql(
         self,
         question: str,
         conversation_context: Optional[ConversationContext] = None
-    ) -> Tuple[str, ValidationResult]:
+    ) -> Tuple[str, ValidationResult, Optional[str], Optional[str]]:
         """
         자연어를 SQL로 변환
 
@@ -989,7 +1091,7 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
             conversation_context: 연속 대화 컨텍스트
 
         Returns:
-            (생성된 SQL, 검증 결과) 튜플
+            (생성된 SQL, 검증 결과, 추천 차트 타입, 인사이트 템플릿) 튜플
         """
         # RAG 컨텍스트 조회
         rag_context = await self._get_rag_context(question)
@@ -1001,27 +1103,20 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
         llm = self._get_llm()
         response = await llm.ainvoke(prompt)
 
-        # SQL 추출 (코드 블록 제거)
-        raw_sql = response.content.strip()
-        if raw_sql.startswith("```"):
-            # ```sql ... ``` 형식 처리
-            lines = raw_sql.split("\n")
-            sql_lines = []
-            in_block = False
-            for line in lines:
-                if line.startswith("```"):
-                    in_block = not in_block
-                    continue
-                if in_block or not line.startswith("```"):
-                    sql_lines.append(line)
-            raw_sql = "\n".join(sql_lines).strip()
+        # JSON 응답 파싱 (SQL + 차트 타입 + 인사이트 템플릿)
+        raw_response = response.content.strip()
+        raw_sql, chart_type, chart_reason, insight_template = self._parse_llm_response(raw_response)
 
         logger.info(f"Generated SQL: {raw_sql[:200]}...")
+        if chart_type:
+            logger.info(f"LLM chart type recommendation: {chart_type} (reason: {chart_reason})")
+        if insight_template:
+            logger.info(f"LLM insight template: {insight_template[:100]}...")
 
         # SQL 검증
         validation_result = self.validator.validate(raw_sql)
 
-        return raw_sql, validation_result
+        return raw_sql, validation_result, chart_type, insight_template
 
     def _get_count(self, sql: str) -> int:
         """
@@ -1167,8 +1262,8 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
             is_refinement=is_refinement
         )
 
-        # SQL 생성
-        raw_sql, validation_result = await self.generate_sql(question, conversation_context)
+        # SQL 생성 (차트 타입 + 인사이트 템플릿 포함)
+        raw_sql, validation_result, llm_chart_type, insight_template = await self.generate_sql(question, conversation_context)
 
         if not validation_result.is_valid:
             return {
@@ -1177,7 +1272,9 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
                 "rowCount": 0,
                 "sql": raw_sql,
                 "error": f"SQL validation failed: {', '.join(validation_result.issues)}",
-                "executionTimeMs": 0
+                "executionTimeMs": 0,
+                "llmChartType": llm_chart_type,  # 검증 실패 시에도 차트 타입 포함
+                "insightTemplate": insight_template  # 검증 실패 시에도 인사이트 템플릿 포함
             }
 
         # SQL 실행
@@ -1193,7 +1290,7 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
                 previous_result_summary=f"ERROR: {result.error}"
             )
 
-            raw_sql, validation_result = await self.generate_sql(
+            raw_sql, validation_result, llm_chart_type, insight_template = await self.generate_sql(
                 f"{question}\n\n(이전 SQL 오류: {result.error}. 다른 방법으로 시도해주세요.)",
                 retry_context
             )
@@ -1225,7 +1322,9 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
             "error": result.error,
             "executionTimeMs": result.execution_time_ms,
             "isAggregation": agg_ctx is not None,   # 집계 쿼리 여부
-            "aggregationContext": aggregation_context  # 집계 컨텍스트 (None이면 일반 쿼리)
+            "aggregationContext": aggregation_context,  # 집계 컨텍스트 (None이면 일반 쿼리)
+            "llmChartType": llm_chart_type,         # LLM 추천 차트 타입
+            "insightTemplate": insight_template     # LLM 생성 인사이트 템플릿
         }
 
     def _build_conversation_context(
