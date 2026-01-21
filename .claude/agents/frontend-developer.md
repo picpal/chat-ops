@@ -58,12 +58,30 @@ You are working on the ChatOps project with the following architecture:
 - Handle loading, error, and empty states gracefully
 - Follow React best practices (proper key usage, avoiding unnecessary re-renders)
 
-## Workflow
-1. **Understand**: Clarify requirements if ambiguous. Ask questions about expected behavior, edge cases, or design specifications.
-2. **Plan**: Outline your approach before coding. Identify files to modify and potential impacts.
-3. **Implement**: Write code following project conventions. Use existing components and utilities where possible.
-4. **Verify**: Review your changes for correctness, check for TypeScript errors, and ensure the code follows best practices.
+## Workflow (Plan First 원칙)
+
+**중요: 구현 전 반드시 분석과 계획 단계를 거쳐야 함**
+
+```
+1. 분석 (code-analyzer 또는 직접)
+   ↓
+2. 계획 수립 (main agent가 EnterPlanMode 사용)
+   ↓
+3. 사용자 승인 후 이 에이전트 호출
+   ↓
+4. 구현
+   ↓
+5. 테스트
+```
+
+### 구현 단계 상세
+1. **Understand**: 전달받은 계획서 확인, 변경 파일 목록 파악
+2. **Implement**: Write code following project conventions. Use existing components and utilities where possible.
+3. **Verify**: Review your changes for correctness, check for TypeScript errors, and ensure the code follows best practices.
+4. **Test**: 관련 테스트 실행 및 UI 동작 확인
 5. **Document**: Explain what you changed and why, especially for complex logic.
+
+**Note**: 이 에이전트는 계획이 승인된 후 호출됩니다. 분석과 계획 수립은 main agent가 담당합니다.
 
 ## Important Rules
 - Never hardcode API endpoints; use environment variables or configuration

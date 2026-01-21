@@ -139,12 +139,30 @@ docker-compose -f infra/docker/docker-compose.yml up -d core-api
 ./gradlew flywayMigrate
 ```
 
-### Workflow
-1. **Understand**: 요구사항 분석, 기존 코드 파악
-2. **Design**: API 설계, DTO/Entity 설계
+### Workflow (Plan First 원칙)
+
+**중요: 구현 전 반드시 분석과 계획 단계를 거쳐야 함**
+
+```
+1. 분석 (code-analyzer 또는 직접)
+   ↓
+2. 계획 수립 (main agent가 EnterPlanMode 사용)
+   ↓
+3. 사용자 승인 후 이 에이전트 호출
+   ↓
+4. 구현
+   ↓
+5. 테스트
+```
+
+### 구현 단계 상세
+1. **Understand**: 전달받은 계획서 확인, 변경 파일 목록 파악
+2. **Design**: API 설계, DTO/Entity 설계 (계획에 따라)
 3. **Implement**: 코드 작성
 4. **Test**: JUnit 테스트 작성 및 실행
 5. **Verify**: API 호출로 동작 확인
+
+**Note**: 이 에이전트는 계획이 승인된 후 호출됩니다. 분석과 계획 수립은 main agent가 담당합니다.
 
 ## Quality Standards
 

@@ -75,7 +75,65 @@ See: infra/docker/.env.example
 - Migration errors: check Flyway logs and db/migration order
 - Slow queries: ensure time range filter + limit are enforced
 
-## 8. Agent 사용 가이드
+## 8. Plan First 원칙 (필수)
+
+**복잡한 작업은 반드시 계획을 먼저 수립하라**
+
+### 언제 Plan Mode를 사용하는가?
+
+| 조건 | Plan Mode 필요 |
+|------|---------------|
+| 여러 파일 수정이 필요한 기능 | ✅ 필수 |
+| 기존 코드 수정/개선/리팩토링 | ✅ 필수 |
+| 새로운 기능 추가 | ✅ 필수 |
+| 버그 수정 (영향 범위 큼) | ✅ 필수 |
+| 단순 오타/설정값 수정 | ❌ 불필요 |
+| 파일 조회/질문 응답 | ❌ 불필요 |
+
+### Plan Mode 워크플로우
+
+```
+1. 요청 접수
+   ↓
+2. 코드 분석 (code-analyzer 에이전트 활용)
+   - 관련 파일 파악
+   - 의존성 분석
+   - 영향 범위 확인
+   ↓
+3. 계획 수립 (EnterPlanMode)
+   - 변경 파일 목록
+   - 구현 단계
+   - 테스트 계획
+   ↓
+4. 사용자 승인 (ExitPlanMode)
+   ↓
+5. 구현 (개발 에이전트 활용)
+   ↓
+6. 테스트 (tester 에이전트)
+```
+
+### EnterPlanMode 사용 예시
+
+```
+사용자: "결제 API에 새로운 필드 추가해줘"
+
+Claude:
+1. code-analyzer로 관련 코드 분석
+2. EnterPlanMode 진입
+3. 계획서 작성:
+   - 변경 파일: PaymentDTO.java, payments API, UI 컴포넌트
+   - 단계: DTO 수정 → API 수정 → UI 반영 → 테스트
+4. ExitPlanMode로 승인 요청
+5. 승인 후 구현 진행
+```
+
+### Plan 작성 위치
+
+계획서는 `.claude/plan.md` 파일에 작성됩니다.
+
+---
+
+## 9. Agent 사용 가이드
 
 프로젝트에 설정된 에이전트를 **적극 활용**하세요.
 
@@ -84,13 +142,14 @@ See: infra/docker/.env.example
 **"작업 전, 해당 에이전트가 있는지 먼저 확인하라"**
 
 ```
-작업 요청 → 에이전트 존재 확인 → 있으면 에이전트 사용 → 없으면 직접 작업
+작업 요청 → 코드 분석 → 계획 수립 → 에이전트로 구현 → 테스트
 ```
 
 #### 에이전트 사용 판단 기준
 
 | 질문 | Yes → 에이전트 사용 |
 |------|---------------------|
+| 코드 구조/의존성 분석이 필요한가? | `code-analyzer` |
 | 코드 수정 후 테스트가 필요한가? | `tester` |
 | 특정 서비스(AI/Core API/UI) 코드를 수정하는가? | `ai-orchestrator-dev`, `core-api-dev`, `frontend-developer` |
 | 서버 상태 확인/제어가 필요한가? | `server-ops-controller` |
@@ -118,6 +177,7 @@ See: infra/docker/.env.example
 
 | 에이전트 | 용도 | 사용 시점 |
 |---------|------|----------|
+| **code-analyzer** | 코드 분석, 의존성 파악, 영향 범위 분석 | **구현 전 필수** - 수정/개선/신규 기능 작업 시 |
 | server-ops-controller | 서버 시작/중지/재시작/상태확인 | 개발 시작/종료, 서비스 문제 발생 시 |
 | ai-orchestrator-dev | AI Orchestrator (Python/FastAPI) 개발 | LLM 프롬프트, Text-to-SQL, RAG, SQL Validator 작업 |
 | core-api-dev | Core API (Java/Spring Boot) 개발 | REST API, QueryPlan 검증, SQL Builder, DB 마이그레이션 |
@@ -126,31 +186,41 @@ See: infra/docker/.env.example
 | frontend-developer | React UI 개발 | 프론트엔드 컴포넌트/페이지 작업 |
 | project-doc-writer | 문서 작성 | 개발 계획서, ADR, 기술 문서 작성 |
 | work-logger | 작업 기록 | 작업 완료 후 기록 필요 시 |
-| file-explorer | 파일 탐색 | 코드베이스 구조 파악, 파일 찾기 |
+| file-explorer | 파일 탐색 | 파일 위치 찾기, 프로젝트 구조 파악 |
 
 ### 워크플로우 예시
+
+**신규 기능 / 수정 / 개선 (공통):**
+| 단계 | 에이전트/도구 | 필수 |
+|------|--------------|------|
+| 1. 코드 분석 | `code-analyzer` | ✅ |
+| 2. 계획 수립 | `EnterPlanMode` | ✅ |
+| 3. 사용자 승인 | `ExitPlanMode` | ✅ |
+| 4. 구현 | 개발 에이전트 | ✅ |
+| 5. 테스트 | `tester` | ✅ |
+| 6. 문서화 | `project-doc-writer` | - |
 
 **프론트엔드 개발:**
 | 단계 | 에이전트 | 필수 |
 |------|----------|------|
-| 1. 서버 시작 | `server-ops-controller` | O |
-| 2. UI 컴포넌트 작업 | `frontend-developer` | O |
-| 3. 테스트 실행 | `tester` | O |
-| 4. 오류 분석 (필요시) | `log-analyzer` | - |
-| 5. 문서화 (필요시) | `project-doc-writer` | - |
-| 6. 서버 중지 | `server-ops-controller` | O |
+| 1. 코드 분석 | `code-analyzer` | ✅ |
+| 2. 계획 수립/승인 | `EnterPlanMode` → `ExitPlanMode` | ✅ |
+| 3. 서버 시작 | `server-ops-controller` | ✅ |
+| 4. UI 컴포넌트 작업 | `frontend-developer` | ✅ |
+| 5. 테스트 실행 | `tester` | ✅ |
+| 6. 오류 분석 (필요시) | `log-analyzer` | - |
 
 **백엔드 개발:**
 | 단계 | 에이전트 | 필수 |
 |------|----------|------|
-| 1. 서버 시작 | `server-ops-controller` | O |
-| 2. AI Orchestrator 작업 | `ai-orchestrator-dev` | O |
-| 3. Core API 작업 | `core-api-dev` | O |
-| 4. 테스트 실행 | `tester` | O |
-| 5. 오류 분석 (필요시) | `log-analyzer` | - |
-| 6. 서버 중지 | `server-ops-controller` | O |
+| 1. 코드 분석 | `code-analyzer` | ✅ |
+| 2. 계획 수립/승인 | `EnterPlanMode` → `ExitPlanMode` | ✅ |
+| 3. 서버 시작 | `server-ops-controller` | ✅ |
+| 4. AI/Core API 작업 | `ai-orchestrator-dev` / `core-api-dev` | ✅ |
+| 5. 테스트 실행 | `tester` | ✅ |
+| 6. 오류 분석 (필요시) | `log-analyzer` | - |
 
-**중요: 코드 수정 후 반드시 해당 테스트 에이전트 실행**
+**중요: 구현 전 반드시 code-analyzer로 분석 + 계획 수립**
 
 ### 주의사항
 
@@ -163,7 +233,7 @@ See: infra/docker/.env.example
 - **check-point 기록**: 주요 구현 완료 시 check-point/ 폴더에 문서화
 - **test-scenarios 기록**: 테스트 시나리오는 test-scenarios/ 폴더에 저장
 
-## 9. Business Domain (PG 결제 백오피스)
+## 10. Business Domain (PG 결제 백오피스)
 
 이 서비스는 **PG(결제 게이트웨이) 백오피스**로, 자연어로 결제/정산 데이터를 조회합니다.
 

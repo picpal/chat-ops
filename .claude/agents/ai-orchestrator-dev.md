@@ -123,12 +123,30 @@ docker-compose -f infra/docker/docker-compose.yml build ai-orchestrator
 docker-compose -f infra/docker/docker-compose.yml up -d ai-orchestrator
 ```
 
-### Workflow
-1. **Understand**: 요구사항 분석, 관련 코드 파악
-2. **Design**: 프롬프트/로직 설계
-3. **Implement**: 코드 작성
-4. **Test**: pytest로 단위 테스트
+### Workflow (Plan First 원칙)
+
+**중요: 구현 전 반드시 분석과 계획 단계를 거쳐야 함**
+
+```
+1. 분석 (code-analyzer 또는 직접)
+   ↓
+2. 계획 수립 (main agent가 EnterPlanMode 사용)
+   ↓
+3. 사용자 승인 후 이 에이전트 호출
+   ↓
+4. 구현
+   ↓
+5. 테스트
+```
+
+### 구현 단계 상세
+1. **Understand**: 전달받은 계획서 확인, 변경 파일 목록 파악
+2. **Implement**: 계획에 따라 코드 작성
+3. **Test**: pytest로 단위 테스트
+4. **Rebuild**: Docker 재빌드 (필요시)
 5. **Verify**: 실제 요청으로 동작 확인
+
+**Note**: 이 에이전트는 계획이 승인된 후 호출됩니다. 분석과 계획 수립은 main agent가 담당합니다.
 
 ## Quality Standards
 
