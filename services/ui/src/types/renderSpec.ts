@@ -131,6 +131,12 @@ export interface SummaryStatsConfig {
   source: 'llm' | 'rule' | 'fallback'
 }
 
+// Data Source configuration for chart
+export interface DataSourceConfig {
+  table?: string | null  // 테이블명 (SQL에서 추출)
+  rowCount?: number      // 조회 건수
+}
+
 export interface ChartConfig {
   chartType: ChartType
   dataRef?: string
@@ -141,6 +147,7 @@ export interface ChartConfig {
   tooltip?: boolean
   insight?: InsightConfig  // AI가 생성한 인사이트
   summaryStats?: SummaryStatsConfig  // 차트 유형에 맞는 동적 Summary Stats
+  dataSource?: DataSourceConfig  // 데이터 소스 정보 (테이블명, 건수)
 }
 
 export interface ChartRenderSpec extends BaseRenderSpec {

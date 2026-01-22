@@ -438,6 +438,160 @@ class RenderComposerService:
         logger.info(f"[ChartType] final={base_type} (default)")
         return base_type
 
+    def _identify_multi_series_axis(
+        self,
+        group_by: List[str],
+        user_message: str
+    ) -> tuple:
+        """
+        다중 groupBy에서 멀티 시리즈 차트 축 식별
+
+        다중 groupBy(카테고리+시계열)일 때:
+        - X축: 시계열 필드 (month, date 등)
+        - 시리즈 키: 카테고리 필드 (merchantId, status 등)
+
+        Args:
+            group_by: groupBy 필드 리스트
+            user_message: 사용자 메시지 (추이/트렌드 키워드 감지용)
+
+        Returns:
+            (x_axis_key, series_key, is_multi_series) 튜플
+            - x_axis_key: X축에 사용할 필드 (시계열)
+            - series_key: 시리즈 분리에 사용할 필드 (카테고리)
+            - is_multi_series: 멀티 시리즈 여부
+        """
+        if len(group_by) < 2:
+            return (None, None, False)
+
+        # groupBy에서 시계열/카테고리 필드 분리
+        date_fields = [f for f in group_by if f in DATE_FIELDS]
+        category_fields = [f for f in group_by if f in CATEGORY_FIELDS]
+
+        # 추이/트렌드 키워드 감지
+        trend_keywords = CHART_TYPE_KEYWORDS.get("line", [])
+        message_lower = user_message.lower()
+        has_trend = any(kw in message_lower for kw in trend_keywords)
+
+        logger.info(
+            f"[MultiSeries] groupBy={group_by}, "
+            f"dateFields={date_fields}, categoryFields={category_fields}, "
+            f"has_trend={has_trend}"
+        )
+
+        # 카테고리 + 시계열 + 추이 키워드 → 멀티 시리즈
+        if category_fields and date_fields and has_trend:
+            x_axis_key = date_fields[0]  # 시계열을 X축으로
+            series_key = category_fields[0]  # 카테고리를 시리즈로
+            logger.info(
+                f"[MultiSeries] Detected! x_axis={x_axis_key}, series={series_key}"
+            )
+            return (x_axis_key, series_key, True)
+
+        return (None, None, False)
+
+    def _pivot_data_for_multi_series(
+        self,
+        rows: List[Dict[str, Any]],
+        x_axis_key: str,
+        series_key: str,
+        value_key: str,
+        max_series: int = 5
+    ) -> tuple:
+        """
+        멀티 시리즈 차트를 위한 데이터 피벗
+
+        입력 형태:
+        [
+            {"merchantId": "M001", "month": "2024-01", "totalAmount": 1000000},
+            {"merchantId": "M002", "month": "2024-01", "totalAmount": 800000},
+            {"merchantId": "M001", "month": "2024-02", "totalAmount": 1200000},
+            ...
+        ]
+
+        출력 형태:
+        [
+            {"month": "2024-01", "M001": 1000000, "M002": 800000, ...},
+            {"month": "2024-02", "M001": 1200000, "M002": 900000, ...},
+            ...
+        ]
+
+        Args:
+            rows: 원본 데이터 행
+            x_axis_key: X축 키 (시계열)
+            series_key: 시리즈 키 (카테고리)
+            value_key: 값 키 (집계값)
+            max_series: 최대 시리즈 수 (초과분은 "기타"로 합산)
+
+        Returns:
+            (pivoted_rows, series_keys) 튜플
+            - pivoted_rows: 피벗된 데이터
+            - series_keys: 시리즈 키 리스트 (상위 N개 + 기타)
+        """
+        if not rows:
+            return ([], [])
+
+        # 1. 시리즈별 총합 계산 (상위 N개 선별용)
+        series_totals: Dict[str, float] = {}
+        for row in rows:
+            s_key = str(row.get(series_key, ""))
+            value = row.get(value_key, 0) or 0
+            series_totals[s_key] = series_totals.get(s_key, 0) + float(value)
+
+        # 2. 상위 N개 시리즈 선별
+        sorted_series = sorted(
+            series_totals.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
+        top_series = [s[0] for s in sorted_series[:max_series]]
+        has_others = len(sorted_series) > max_series
+        others_count = len(sorted_series) - max_series if has_others else 0
+        others_label = f"그 외 ({others_count}개)" if has_others else ""
+
+        logger.info(
+            f"[MultiSeries] Top {max_series} series: {top_series}, "
+            f"has_others={has_others}, others_count={others_count}"
+        )
+
+        # 3. X축 값별로 그룹화 및 피벗
+        x_axis_groups: Dict[str, Dict[str, float]] = {}
+        for row in rows:
+            x_val = str(row.get(x_axis_key, ""))
+            s_key = str(row.get(series_key, ""))
+            value = row.get(value_key, 0) or 0
+
+            if x_val not in x_axis_groups:
+                x_axis_groups[x_val] = {x_axis_key: x_val}
+                # 초기값 설정
+                for ts in top_series:
+                    x_axis_groups[x_val][ts] = 0
+                if has_others:
+                    x_axis_groups[x_val][others_label] = 0
+
+            # 값 할당
+            if s_key in top_series:
+                x_axis_groups[x_val][s_key] = float(value)
+            elif has_others:
+                x_axis_groups[x_val][others_label] += float(value)
+
+        # 4. X축 기준 정렬
+        pivoted_rows = sorted(
+            x_axis_groups.values(),
+            key=lambda x: x.get(x_axis_key, "")
+        )
+
+        # 5. 시리즈 키 리스트 반환
+        series_keys = top_series.copy()
+        if has_others:
+            series_keys.append(others_label)
+
+        logger.info(
+            f"[MultiSeries] Pivoted {len(rows)} rows to {len(pivoted_rows)} rows, "
+            f"series_keys={series_keys}"
+        )
+
+        return (pivoted_rows, series_keys)
+
     def _is_date_field(self, field: str) -> bool:
         """날짜 필드 여부 확인 (DATE_FIELDS 상수 사용)"""
         return field in DATE_FIELDS
@@ -523,7 +677,7 @@ class RenderComposerService:
         query_plan: Dict[str, Any],
         user_message: str
     ) -> Dict[str, Any]:
-        """향상된 차트 형태의 RenderSpec 생성"""
+        """향상된 차트 형태의 RenderSpec 생성 (멀티 시리즈 지원)"""
         data = query_result.get("data", {})
         rows = data.get("rows", [])
         group_by = query_plan.get("groupBy", [])
@@ -532,13 +686,33 @@ class RenderComposerService:
         # 차트 타입 자동 결정
         chart_type = self._determine_chart_type(query_plan, rows, user_message)
 
-        # X축/Y축 키 설정
-        x_axis_key = group_by[0] if group_by else "category"
+        # Y축 키 설정 (집계값)
         y_axis_key = "count"
-
         if aggregations:
             first_agg = aggregations[0]
             y_axis_key = first_agg.get("alias") or f"{first_agg['function']}_{first_agg['field']}"
+
+        # 멀티 시리즈 감지 (다중 groupBy + 추이 키워드)
+        ms_x_axis, ms_series_key, is_multi_series = self._identify_multi_series_axis(
+            group_by, user_message
+        )
+
+        # 멀티 시리즈인 경우 데이터 피벗
+        chart_data = data
+        series_keys: List[str] = []
+        if is_multi_series and ms_x_axis and ms_series_key:
+            pivoted_rows, series_keys = self._pivot_data_for_multi_series(
+                rows,
+                x_axis_key=ms_x_axis,
+                series_key=ms_series_key,
+                value_key=y_axis_key
+            )
+            chart_data = {"rows": pivoted_rows}
+            x_axis_key = ms_x_axis
+            # 멀티 시리즈일 때 line 차트로 강제
+            chart_type = "line"
+        else:
+            x_axis_key = group_by[0] if group_by else "category"
 
         # 차트 타입별 설정
         chart_config: Dict[str, Any] = {
@@ -565,8 +739,19 @@ class RenderComposerService:
                 "type": "number"
             }
 
-            # 다중 시리즈 지원 (여러 집계가 있는 경우)
-            if len(aggregations) > 1:
+            # 멀티 시리즈 차트 설정
+            if is_multi_series and series_keys:
+                chart_config["series"] = [
+                    {
+                        "dataKey": sk,
+                        "name": sk,
+                        "type": "line"
+                    }
+                    for sk in series_keys
+                ]
+                logger.info(f"[MultiSeries] Chart series configured: {series_keys}")
+            # 기존 다중 집계 시리즈 지원
+            elif len(aggregations) > 1:
                 chart_config["series"] = [
                     {
                         "dataKey": agg.get("alias") or f"{agg['function']}_{agg['field']}",
@@ -581,11 +766,13 @@ class RenderComposerService:
             "title": self._generate_chart_title(query_plan, user_message),
             "description": f"'{user_message}' 분석 결과입니다.",
             "chart": chart_config,
-            "data": data,
+            "data": chart_data,
             "metadata": {
                 "requestId": query_result.get("requestId"),
                 "generatedAt": datetime.utcnow().isoformat() + "Z",
-                "chartType": chart_type
+                "chartType": chart_type,
+                "isMultiSeries": is_multi_series,
+                "seriesKey": ms_series_key if is_multi_series else None
             }
         }
 

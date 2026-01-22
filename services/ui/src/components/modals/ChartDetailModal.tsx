@@ -142,7 +142,6 @@ const ChartDetailModal: React.FC = () => {
 
   // Get primary Y axis key for display
   const primaryYAxisKey = series?.[0]?.dataKey || yAxis?.dataKey || 'value'
-  const primaryYAxisName = series?.[0]?.name || primaryYAxisKey
 
   // Render chart based on type
   const renderChart = () => {
@@ -150,7 +149,7 @@ const ChartDetailModal: React.FC = () => {
 
     const commonProps = {
       data: chartData,
-      margin: { top: 20, right: 30, left: 20, bottom: xAxis?.label ? 40 : 20 },
+      margin: { top: 20, right: 30, left: 20, bottom: xAxis?.label ? 45 : 20 },
     }
 
     const tooltipStyle = {
@@ -163,19 +162,28 @@ const ChartDetailModal: React.FC = () => {
       },
     }
 
+    const legendStyle = {
+      wrapperStyle: { paddingTop: 15, fontSize: 11 },
+    }
+
     // Common X/Y Axis components with labels
     const renderXAxisComponent = () => (
       <XAxis dataKey={xAxisDataKey} tick={{ fontSize: 12 }} stroke="#94a3b8">
         {xAxis?.label && (
-          <Label value={xAxis.label} offset={-10} position="insideBottom" style={{ fontSize: 12, fill: '#64748b' }} />
+          <Label value={xAxis.label} offset={-5} position="insideBottom" style={{ fontSize: 12, fill: '#64748b' }} />
         )}
       </XAxis>
     )
 
     const renderYAxisComponent = () => (
-      <YAxis tick={{ fontSize: 12 }} stroke="#94a3b8">
+      <YAxis
+        tick={{ fontSize: 12 }}
+        stroke="#94a3b8"
+        tickFormatter={(value) => formatCompactNumber(value)}
+        width={70}
+      >
         {yAxis?.label && (
-          <Label value={yAxis.label} angle={-90} position="insideLeft" style={{ fontSize: 12, fill: '#64748b', textAnchor: 'middle' }} />
+          <Label value={yAxis.label} angle={-90} position="insideLeft" dx={-15} style={{ fontSize: 12, fill: '#64748b', textAnchor: 'middle' }} />
         )}
       </YAxis>
     )
@@ -188,7 +196,7 @@ const ChartDetailModal: React.FC = () => {
             {renderXAxisComponent()}
             {renderYAxisComponent()}
             <Tooltip {...tooltipStyle} />
-            {showLegend && <Legend />}
+            {showLegend && <Legend {...legendStyle} />}
             {series && series.length > 0 ? (
               series.map((s, index) => (
                 <Bar
@@ -220,7 +228,7 @@ const ChartDetailModal: React.FC = () => {
             {renderXAxisComponent()}
             {renderYAxisComponent()}
             <Tooltip {...tooltipStyle} />
-            {showLegend && <Legend />}
+            {showLegend && <Legend {...legendStyle} />}
             {series && series.length > 0 ? (
               series.map((s, index) => (
                 <Line
@@ -254,7 +262,7 @@ const ChartDetailModal: React.FC = () => {
             {renderXAxisComponent()}
             {renderYAxisComponent()}
             <Tooltip {...tooltipStyle} />
-            {showLegend && <Legend />}
+            {showLegend && <Legend {...legendStyle} />}
             {series && series.length > 0 ? (
               series.map((s, index) => {
                 const color = getSeriesColor(s, index)
@@ -371,7 +379,7 @@ const ChartDetailModal: React.FC = () => {
               layout="horizontal"
               verticalAlign="bottom"
               align="center"
-              wrapperStyle={{ paddingTop: 20 }}
+              wrapperStyle={{ paddingTop: 15, fontSize: 11 }}
             />
           </PieChart>
         )
@@ -457,32 +465,6 @@ const ChartDetailModal: React.FC = () => {
                       {spec.description || 'Data visualization'}
                     </p>
                   </div>
-                  {/* Legend Indicators */}
-                  <div className="flex gap-4">
-                    {series && series.length > 0 ? (
-                      series.map((s, index) => (
-                        <div key={s.dataKey} className="flex items-center gap-2">
-                          <span
-                            className="w-3 h-0.5"
-                            style={{ backgroundColor: getSeriesColor(s, index) }}
-                          />
-                          <span className="text-xs font-medium text-slate-600">
-                            {s.name || s.dataKey}
-                          </span>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="w-3 h-0.5"
-                          style={{ backgroundColor: COLORS[0] }}
-                        />
-                        <span className="text-xs font-medium text-slate-600">
-                          {primaryYAxisName}
-                        </span>
-                      </div>
-                    )}
-                  </div>
                 </div>
 
                 {/* Chart */}
@@ -549,7 +531,7 @@ const ChartDetailModal: React.FC = () => {
                         <div className={item.highlight ? 'bg-blue-50/50 -mx-2 px-2 py-2 rounded-lg' : ''}>
                           <div className="flex items-center gap-1.5 mb-1">
                             {item.icon && (
-                              <Icon name={item.icon} size="xs" className="text-slate-400" />
+                              <Icon name={item.icon} size="sm" className="text-slate-400" />
                             )}
                             <p className="text-xs text-slate-500">{item.label}</p>
                           </div>
@@ -610,10 +592,12 @@ const ChartDetailModal: React.FC = () => {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-slate-800">
-                      Query Result
+                      {chartConfig.dataSource?.table || 'Query Result'}
                     </p>
                     <p className="text-xs text-slate-500">
-                      {chartConfig.dataRef || 'data.rows'}
+                      {chartConfig.dataSource?.rowCount
+                        ? `${chartConfig.dataSource.rowCount.toLocaleString()}건 조회`
+                        : chartConfig.dataRef || 'data.rows'}
                     </p>
                   </div>
                 </div>

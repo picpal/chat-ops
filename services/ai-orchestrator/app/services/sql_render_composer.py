@@ -15,6 +15,7 @@ from app.constants.render_keywords import (
     TIME_FIELD_KEYWORDS,
     CHART_TYPE_KEYWORDS,
     DATE_FIELDS,
+    CATEGORY_FIELDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -147,6 +148,134 @@ def _identify_axis_keys(data: List[Dict[str, Any]], columns: List[str]) -> Tuple
     y_key = numeric_cols[0] if numeric_cols else columns[-1]
 
     return (x_key, y_key)
+
+
+def _identify_multi_series_axis(
+    columns: List[str],
+    user_message: str
+) -> Tuple[Optional[str], Optional[str], bool]:
+    """다중 컬럼에서 멀티 시리즈 차트 축 식별
+
+    컬럼 목록에서 시계열/카테고리 필드를 추론하여 멀티 시리즈 차트 구성
+
+    Args:
+        columns: 컬럼 목록
+        user_message: 사용자 메시지 (추이/트렌드 키워드 감지용)
+
+    Returns:
+        (x_axis_key, series_key, is_multi_series) 튜플
+    """
+    if len(columns) < 3:  # 최소 x축, 시리즈, 값 컬럼 필요
+        return (None, None, False)
+
+    # 컬럼에서 시계열/카테고리 필드 분리
+    date_fields = [col for col in columns if col.lower() in [f.lower() for f in DATE_FIELDS]]
+    category_fields = [col for col in columns if col.lower() in [f.lower() for f in CATEGORY_FIELDS]]
+
+    # 추이/트렌드 키워드 감지
+    trend_keywords = CHART_TYPE_KEYWORDS.get("line", [])
+    message_lower = user_message.lower()
+    has_trend = any(kw in message_lower for kw in trend_keywords)
+
+    logger.info(
+        f"[MultiSeries SQL] columns={columns}, "
+        f"dateFields={date_fields}, categoryFields={category_fields}, "
+        f"has_trend={has_trend}"
+    )
+
+    # 카테고리 + 시계열 + 추이 키워드 → 멀티 시리즈
+    if category_fields and date_fields and has_trend:
+        x_axis_key = date_fields[0]  # 시계열을 X축으로
+        series_key = category_fields[0]  # 카테고리를 시리즈로
+        logger.info(
+            f"[MultiSeries SQL] Detected! x_axis={x_axis_key}, series={series_key}"
+        )
+        return (x_axis_key, series_key, True)
+
+    return (None, None, False)
+
+
+def _pivot_data_for_multi_series(
+    rows: List[Dict[str, Any]],
+    x_axis_key: str,
+    series_key: str,
+    value_key: str,
+    max_series: int = 5
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """멀티 시리즈 차트를 위한 데이터 피벗
+
+    Args:
+        rows: 원본 데이터 행
+        x_axis_key: X축 키 (시계열)
+        series_key: 시리즈 키 (카테고리)
+        value_key: 값 키 (집계값)
+        max_series: 최대 시리즈 수
+
+    Returns:
+        (pivoted_rows, series_keys) 튜플
+    """
+    if not rows:
+        return ([], [])
+
+    # 1. 시리즈별 총합 계산
+    series_totals: Dict[str, float] = {}
+    for row in rows:
+        s_key = str(row.get(series_key, ""))
+        value = row.get(value_key, 0) or 0
+        series_totals[s_key] = series_totals.get(s_key, 0) + float(value)
+
+    # 2. 상위 N개 시리즈 선별
+    sorted_series = sorted(
+        series_totals.items(),
+        key=lambda x: x[1],
+        reverse=True
+    )
+    top_series = [s[0] for s in sorted_series[:max_series]]
+    has_others = len(sorted_series) > max_series
+    others_count = len(sorted_series) - max_series if has_others else 0
+    others_label = f"그 외 ({others_count}개)" if has_others else ""
+
+    logger.info(
+        f"[MultiSeries SQL] Top {max_series} series: {top_series}, "
+        f"has_others={has_others}, others_count={others_count}"
+    )
+
+    # 3. X축 값별로 그룹화 및 피벗
+    x_axis_groups: Dict[str, Dict[str, float]] = {}
+    for row in rows:
+        x_val = str(row.get(x_axis_key, ""))
+        s_key = str(row.get(series_key, ""))
+        value = row.get(value_key, 0) or 0
+
+        if x_val not in x_axis_groups:
+            x_axis_groups[x_val] = {x_axis_key: x_val}
+            for ts in top_series:
+                x_axis_groups[x_val][ts] = 0
+            if has_others:
+                x_axis_groups[x_val][others_label] = 0
+
+        if s_key in top_series:
+            x_axis_groups[x_val][s_key] = float(value)
+        elif has_others:
+            x_axis_groups[x_val][others_label] += float(value)
+
+    # 4. X축 기준 정렬
+    pivoted_rows = sorted(
+        x_axis_groups.values(),
+        key=lambda x: x.get(x_axis_key, "")
+    )
+
+    # 5. 시리즈 키 리스트 반환
+    series_keys = top_series.copy()
+    if has_others:
+        series_keys.append(others_label)
+
+    logger.info(
+        f"[MultiSeries SQL] Pivoted {len(rows)} rows to {len(pivoted_rows)} rows, "
+        f"series_keys={series_keys}"
+    )
+
+    return (pivoted_rows, series_keys)
 
 
 def _detect_trend(values: List[float]) -> Optional[str]:
@@ -720,6 +849,247 @@ def _generate_summary_stats(
 
 
 # ============================================
+# SQL에서 테이블명 추출
+# ============================================
+
+def _extract_table_from_sql(sql: str) -> Optional[str]:
+    """SQL FROM 절에서 테이블명 추출
+
+    Args:
+        sql: SQL 쿼리 문자열
+
+    Returns:
+        테이블명 또는 None
+    """
+    import re
+    if not sql:
+        return None
+
+    # FROM 절에서 테이블명 추출 (정규식)
+    # 지원 패턴: FROM table_name, FROM "table_name", FROM schema.table_name
+    match = re.search(
+        r'\bFROM\s+(?:")?([a-zA-Z_][a-zA-Z0-9_]*)(?:")?',
+        sql,
+        re.IGNORECASE
+    )
+    return match.group(1) if match else None
+
+
+# ============================================
+# 멀티 시리즈 통계 계산
+# ============================================
+
+def _calculate_multi_series_stats(
+    chart_data: List[Dict[str, Any]],
+    x_key: str,
+    series_keys: List[str],
+    chart_type: str
+) -> Dict[str, Any]:
+    """멀티 시리즈 차트의 확장 통계 계산 (피벗된 데이터 기준)
+
+    각 시리즈별로 통계를 계산하고, 전체 합계도 계산합니다.
+    피벗된 데이터를 사용하므로 그래프와 일치하는 통계를 제공합니다.
+
+    Args:
+        chart_data: 피벗된 데이터 (각 행에 x_key와 시리즈별 값이 있음)
+        x_key: X축 키 (시계열)
+        series_keys: 시리즈 키 리스트 (가맹점명 등)
+        chart_type: 차트 타입 (line, bar, pie)
+
+    Returns:
+        확장 통계 딕셔너리
+    """
+    if not chart_data or not series_keys:
+        return {}
+
+    # 1. 각 X축 포인트별 전체 합계 계산
+    x_axis_totals: List[Tuple[str, float]] = []
+    for row in chart_data:
+        x_val = str(row.get(x_key, ""))
+        total = 0.0
+        for sk in series_keys:
+            val = row.get(sk, 0) or 0
+            total += float(val)
+        x_axis_totals.append((x_val, total))
+
+    if not x_axis_totals:
+        return {}
+
+    # 2. 전체 통계 계산
+    all_totals = [t[1] for t in x_axis_totals]
+    grand_total = sum(all_totals)
+    count = len(all_totals)
+    avg = grand_total / count if count > 0 else 0
+    max_val = max(all_totals)
+    min_val = min(all_totals)
+
+    # 피크 시점 (전체 합계가 가장 높은 X축 값)
+    max_idx = all_totals.index(max_val)
+    min_idx = all_totals.index(min_val)
+    peak_time = x_axis_totals[max_idx][0]
+    min_time = x_axis_totals[min_idx][0]
+
+    stats = {
+        "count": count,
+        "total": grand_total,
+        "avg": avg,
+        "max": max_val,
+        "min": min_val,
+        "max_category": peak_time,
+        "min_category": min_time,
+        "max_idx": max_idx,
+        "min_idx": min_idx,
+        "peak_time": peak_time,
+    }
+
+    # 3. 기간 정보
+    if count >= 2:
+        stats["period_start"] = x_axis_totals[0][0]
+        stats["period_end"] = x_axis_totals[-1][0]
+
+    # 4. 성장률 계산 (전반부 vs 후반부)
+    if count >= 2:
+        mid = count // 2
+        first_half_avg = sum(all_totals[:mid]) / mid if mid > 0 else 0
+        second_half_avg = sum(all_totals[mid:]) / (count - mid)
+
+        if first_half_avg > 0:
+            growth_rate = ((second_half_avg - first_half_avg) / first_half_avg) * 100
+        else:
+            growth_rate = 100 if second_half_avg > 0 else 0
+
+        stats["growth_rate"] = growth_rate
+        stats["trend"] = "증가" if growth_rate > 10 else ("감소" if growth_rate < -10 else "유지")
+
+    # 5. 시리즈별 총합 (어느 시리즈가 가장 높은지)
+    series_totals: Dict[str, float] = {sk: 0.0 for sk in series_keys}
+    for row in chart_data:
+        for sk in series_keys:
+            val = row.get(sk, 0) or 0
+            series_totals[sk] += float(val)
+
+    top_series = max(series_totals.items(), key=lambda x: x[1])
+    stats["top_series"] = top_series[0]
+    stats["top_series_total"] = top_series[1]
+
+    logger.info(
+        f"[MultiSeriesStats] count={count}, total={grand_total:.0f}, "
+        f"peak={peak_time}({max_val:.0f}), period={stats.get('period_start')}~{stats.get('period_end')}, "
+        f"top_series={top_series[0]}"
+    )
+
+    return stats
+
+
+def _generate_multi_series_summary_stats(
+    chart_data: List[Dict[str, Any]],
+    x_key: str,
+    series_keys: List[str],
+    chart_type: str,
+    template: Optional[List[Dict[str, Any]]] = None
+) -> Dict[str, Any]:
+    """멀티 시리즈 차트의 Summary Stats 생성
+
+    피벗된 데이터 기준으로 통계를 계산하여 그래프와 일치하는 정보 제공
+
+    Args:
+        chart_data: 피벗된 데이터
+        x_key: X축 키
+        series_keys: 시리즈 키 리스트
+        chart_type: 차트 타입
+        template: LLM 템플릿 (선택적)
+
+    Returns:
+        summaryStats 구조
+    """
+    if not chart_data:
+        return {"items": [], "source": "fallback"}
+
+    # 멀티 시리즈용 통계 계산
+    stats = _calculate_multi_series_stats(chart_data, x_key, series_keys, chart_type)
+
+    if not stats:
+        return {"items": [], "source": "fallback"}
+
+    # LLM 템플릿이 있으면 적용
+    if template and isinstance(template, list) and len(template) > 0:
+        result = _apply_stats_template(template, stats)
+        logger.info(f"[MultiSeriesSummaryStats] Generated from LLM template: {len(result.get('items', []))} items")
+        return result
+
+    # 규칙 기반 생성 (멀티 시리즈 전용)
+    items = []
+
+    # 금액 포맷팅 함수
+    def fmt_currency(val: float) -> str:
+        if val >= 100000000:  # 억 단위
+            return f"₩{val/100000000:.1f}억"
+        elif val >= 10000:  # 만 단위
+            return f"₩{val/10000:.0f}만"
+        return f"₩{int(val):,}"
+
+    def fmt_percent(val: float) -> str:
+        return f"{val:.1f}%"
+
+    # 추세
+    trend = stats.get("trend", "유지")
+    trend_icon = "trending_up" if trend == "증가" else ("trending_down" if trend == "감소" else "trending_flat")
+
+    items.append({
+        "key": "trend",
+        "label": "전체 추세",
+        "value": trend,
+        "type": "trend",
+        "highlight": True,
+        "icon": trend_icon
+    })
+
+    # 피크 시점
+    items.append({
+        "key": "peak_time",
+        "label": "피크 시점",
+        "value": f"{stats.get('peak_time', '')} ({fmt_currency(stats.get('max', 0))})",
+        "type": "text",
+        "icon": "show_chart"
+    })
+
+    # 기간
+    period_start = stats.get("period_start", "")
+    period_end = stats.get("period_end", "")
+    if period_start and period_end:
+        items.append({
+            "key": "period",
+            "label": "기간",
+            "value": f"{period_start} ~ {period_end}",
+            "type": "text",
+            "icon": "date_range"
+        })
+
+    # 평균
+    items.append({
+        "key": "avg",
+        "label": "평균",
+        "value": stats.get("avg", 0),
+        "type": "currency",
+        "icon": "calculate"
+    })
+
+    # 성장률
+    growth_rate = stats.get("growth_rate")
+    if growth_rate is not None:
+        items.append({
+            "key": "growth_rate",
+            "label": "성장률",
+            "value": fmt_percent(growth_rate),
+            "type": "percentage",
+            "icon": "speed"
+        })
+
+    logger.info(f"[MultiSeriesSummaryStats] Generated from rules: {len(items)} items")
+    return {"items": items, "source": "rule"}
+
+
+# ============================================
 # 차트 RenderSpec 구성
 # ============================================
 
@@ -730,7 +1100,7 @@ def _compose_chart_render_spec(
     insight_template: Optional[str] = None,
     summary_stats_template: Optional[List[Dict[str, Any]]] = None
 ) -> Dict[str, Any]:
-    """차트 타입의 RenderSpec 구성
+    """차트 타입의 RenderSpec 구성 (멀티 시리즈 지원)
 
     Args:
         result: SQL 실행 결과
@@ -775,6 +1145,26 @@ def _compose_chart_render_spec(
 
     x_key, y_key = _identify_axis_keys(data, columns)
 
+    # 멀티 시리즈 감지 (컬럼 목록 + 추이 키워드)
+    ms_x_axis, ms_series_key, is_multi_series = _identify_multi_series_axis(
+        columns, question
+    )
+
+    # 멀티 시리즈인 경우 데이터 피벗
+    chart_data = data
+    series_keys: List[str] = []
+    if is_multi_series and ms_x_axis and ms_series_key:
+        pivoted_data, series_keys = _pivot_data_for_multi_series(
+            data,
+            x_axis_key=ms_x_axis,
+            series_key=ms_series_key,
+            value_key=y_key
+        )
+        chart_data = pivoted_data
+        x_key = ms_x_axis
+        # 멀티 시리즈일 때 line 차트로 강제
+        chart_type = "line"
+
     # X축 라벨 생성
     x_label = x_key.replace("_", " ").title()
     y_label = y_key.replace("_", " ").title()
@@ -803,35 +1193,52 @@ def _compose_chart_render_spec(
                 "label": y_label,
                 "type": "number"
             },
-            "series": [
-                {
-                    "dataKey": y_key,
-                    "name": y_label,
-                    "type": chart_type if chart_type in ["bar", "line"] else "bar"
-                }
-            ],
             "legend": True,
             "tooltip": True
         },
-        "data": data,
         "metadata": {
             "sql": result.get("sql"),
             "executionTimeMs": result.get("executionTimeMs"),
             "mode": "text_to_sql",
-            "chartType": chart_type
+            "chartType": chart_type,
+            "isMultiSeries": is_multi_series,
+            "seriesKey": ms_series_key if is_multi_series else None
         }
     }
 
-    # pie 차트의 경우 series 대신 별도 설정
-    if chart_type == "pie":
+    # 멀티 시리즈 차트 설정
+    if is_multi_series and series_keys:
+        render_spec["chart"]["series"] = [
+            {
+                "dataKey": sk,
+                "name": sk,
+                "type": "line"
+            }
+            for sk in series_keys
+        ]
+        render_spec["data"] = chart_data
+        logger.info(f"[MultiSeries SQL] Chart series configured: {series_keys}")
+    elif chart_type == "pie":
+        # pie 차트의 경우 series 대신 별도 설정
         render_spec["chart"]["series"] = [
             {
                 "dataKey": y_key,
                 "name": y_label
             }
         ]
+        render_spec["data"] = data
+    else:
+        # 단일 시리즈
+        render_spec["chart"]["series"] = [
+            {
+                "dataKey": y_key,
+                "name": y_label,
+                "type": chart_type if chart_type in ["bar", "line"] else "bar"
+            }
+        ]
+        render_spec["data"] = data
 
-    # 인사이트 생성 및 추가
+    # 인사이트 생성 및 추가 (피벗된 데이터가 아닌 원본 데이터로)
     insight = _generate_insight(
         data=data,
         x_key=x_key,
@@ -842,14 +1249,32 @@ def _compose_chart_render_spec(
     render_spec["chart"]["insight"] = insight
 
     # Summary Stats 생성 및 추가
-    summary_stats = _generate_summary_stats(
-        data=data,
-        x_key=x_key,
-        y_key=y_key,
-        chart_type=chart_type,
-        template=summary_stats_template
-    )
+    # 멀티 시리즈인 경우 피벗된 데이터로 통계 계산 (그래프와 일치)
+    if is_multi_series and series_keys:
+        summary_stats = _generate_multi_series_summary_stats(
+            chart_data=chart_data,  # 피벗된 데이터 사용
+            x_key=x_key,
+            series_keys=series_keys,
+            chart_type=chart_type,
+            template=summary_stats_template
+        )
+    else:
+        # 단일 시리즈: 기존 로직
+        summary_stats = _generate_summary_stats(
+            data=data,
+            x_key=x_key,
+            y_key=y_key,
+            chart_type=chart_type,
+            template=summary_stats_template
+        )
     render_spec["chart"]["summaryStats"] = summary_stats
+
+    # Data Source 정보 추가 (SQL에서 테이블명 추출)
+    table_name = _extract_table_from_sql(result.get("sql", ""))
+    render_spec["chart"]["dataSource"] = {
+        "table": table_name,
+        "rowCount": row_count
+    }
 
     return render_spec
 

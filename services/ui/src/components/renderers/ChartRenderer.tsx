@@ -22,7 +22,7 @@ import { ChartRenderSpec, ChartSeries, SummaryStatItem } from '@/types/renderSpe
 import { QueryResult } from '@/types/queryResult'
 import { Card, Button, Icon } from '@/components/common'
 import { useModal } from '@/hooks'
-import { getJSONPath, formatNumber } from '@/utils'
+import { getJSONPath, formatNumber, formatCompactNumber } from '@/utils'
 
 interface ChartRendererProps {
   spec: ChartRenderSpec
@@ -213,7 +213,7 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
 
     const commonProps = {
       data: chartData,
-      margin: { top: 20, right: 30, left: 20, bottom: xAxis?.label ? 40 : 20 },
+      margin: { top: 20, right: 30, left: 20, bottom: xAxis?.label ? 45 : 20 },
     }
 
     const tooltipStyle = {
@@ -225,19 +225,28 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
       },
     }
 
+    const legendStyle = {
+      wrapperStyle: { paddingTop: 15, fontSize: 11 },
+    }
+
     // Common X/Y Axis components with labels
     const renderXAxis = () => (
       <XAxis dataKey={xAxisDataKey} tick={{ fontSize: 12 }} stroke="#94a3b8">
         {xAxis?.label && (
-          <Label value={xAxis.label} offset={-10} position="insideBottom" style={{ fontSize: 12, fill: '#64748b' }} />
+          <Label value={xAxis.label} offset={-5} position="insideBottom" style={{ fontSize: 12, fill: '#64748b' }} />
         )}
       </XAxis>
     )
 
     const renderYAxis = () => (
-      <YAxis tick={{ fontSize: 12 }} stroke="#94a3b8">
+      <YAxis
+        tick={{ fontSize: 12 }}
+        stroke="#94a3b8"
+        tickFormatter={(value) => formatCompactNumber(value)}
+        width={70}
+      >
         {yAxis?.label && (
-          <Label value={yAxis.label} angle={-90} position="insideLeft" style={{ fontSize: 12, fill: '#64748b', textAnchor: 'middle' }} />
+          <Label value={yAxis.label} angle={-90} position="insideLeft" dx={-15} style={{ fontSize: 12, fill: '#64748b', textAnchor: 'middle' }} />
         )}
       </YAxis>
     )
@@ -253,7 +262,7 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
           {renderXAxis()}
           {renderYAxis()}
           {showTooltip && <Tooltip {...tooltipStyle} />}
-          {showLegend && <Legend />}
+          {showLegend && <Legend {...legendStyle} />}
           {series.map((s, index) => renderSeriesElement(s, index, 'bar'))}
         </ComposedChart>
       )
@@ -267,7 +276,7 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
             {renderXAxis()}
             {renderYAxis()}
             {showTooltip && <Tooltip {...tooltipStyle} />}
-            {showLegend && <Legend />}
+            {showLegend && <Legend {...legendStyle} />}
             {series && series.length > 0 ? (
               series.map((s, index) => (
                 <Bar
@@ -303,7 +312,7 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
             {renderXAxis()}
             {renderYAxis()}
             {showTooltip && <Tooltip {...tooltipStyle} />}
-            {showLegend && <Legend />}
+            {showLegend && <Legend {...legendStyle} />}
             {series && series.length > 0 ? (
               series.map((s, index) => (
                 <Line
@@ -337,7 +346,7 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
             {renderXAxis()}
             {renderYAxis()}
             {showTooltip && <Tooltip {...tooltipStyle} />}
-            {showLegend && <Legend />}
+            {showLegend && <Legend {...legendStyle} />}
             {series && series.length > 0 ? (
               series.map((s, index) => {
                 const color = getSeriesColor(s, index)
@@ -455,7 +464,7 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
               layout="horizontal"
               verticalAlign="bottom"
               align="center"
-              wrapperStyle={{ paddingTop: 20 }}
+              wrapperStyle={{ paddingTop: 15, fontSize: 11 }}
             />
           </PieChart>
         )

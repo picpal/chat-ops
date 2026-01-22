@@ -1226,3 +1226,491 @@ class TestSummaryStatsGeneration:
         # 라인 차트이므로 trend 항목이 있어야 함
         keys = [item["key"] for item in summary_stats["items"]]
         assert "trend" in keys
+
+
+class TestMultiSeriesChart:
+    """
+    멀티 시리즈 차트 테스트
+    다중 groupBy(카테고리+시계열) + 추이 키워드일 때 멀티 시리즈 line chart 생성
+    """
+
+    def setup_method(self):
+        self.composer = RenderComposerService()
+
+    def test_merchant_monthly_trend_multi_series(self):
+        """
+        가맹점별 월별 추이 -> 멀티 시리즈 line chart
+        X축: month (시계열), 시리즈: 가맹점별 line
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"merchantId": "M001", "month": "2024-01", "totalAmount": 1000000},
+                    {"merchantId": "M002", "month": "2024-01", "totalAmount": 800000},
+                    {"merchantId": "M001", "month": "2024-02", "totalAmount": 1200000},
+                    {"merchantId": "M002", "month": "2024-02", "totalAmount": 900000},
+                    {"merchantId": "M001", "month": "2024-03", "totalAmount": 1100000},
+                    {"merchantId": "M002", "month": "2024-03", "totalAmount": 850000}
+                ]
+            },
+            "metadata": {"executionTimeMs": 20}
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["merchantId", "month"],
+            "aggregations": [{"function": "sum", "field": "amount", "alias": "totalAmount"}]
+        }
+
+        spec = self.composer.compose(
+            query_result,
+            query_plan,
+            "가맹점별 결제금액 추이 그래프 (최근 3개월)"
+        )
+
+        assert spec["type"] == "chart", "멀티 시리즈 요청은 chart 타입"
+        assert spec["chart"]["chartType"] == "line", "추이 요청은 line chart"
+        assert spec["chart"]["xAxis"]["dataKey"] == "month", "X축은 시계열(month)"
+        assert "series" in spec["chart"], "시리즈 설정이 있어야 함"
+        assert len(spec["chart"]["series"]) == 2, "가맹점 2개 = 시리즈 2개"
+
+        # 시리즈 키 확인
+        series_keys = [s["dataKey"] for s in spec["chart"]["series"]]
+        assert "M001" in series_keys, "M001 시리즈가 있어야 함"
+        assert "M002" in series_keys, "M002 시리즈가 있어야 함"
+
+        # 메타데이터 확인
+        assert spec["metadata"]["isMultiSeries"] is True
+        assert spec["metadata"]["seriesKey"] == "merchantId"
+
+        # 데이터가 피벗되었는지 확인
+        pivoted_rows = spec["data"]["rows"]
+        assert len(pivoted_rows) == 3, "3개월 데이터 = 3행"
+        first_row = pivoted_rows[0]
+        assert "month" in first_row
+        assert "M001" in first_row or "M002" in first_row
+
+    def test_status_monthly_trend_multi_series(self):
+        """
+        상태별 월별 결제 추이 -> 멀티 시리즈 line chart
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"status": "DONE", "month": "2024-01", "count": 100},
+                    {"status": "CANCELED", "month": "2024-01", "count": 10},
+                    {"status": "DONE", "month": "2024-02", "count": 120},
+                    {"status": "CANCELED", "month": "2024-02", "count": 15}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["status", "month"],
+            "aggregations": [{"function": "count", "field": "*", "alias": "count"}]
+        }
+
+        spec = self.composer.compose(
+            query_result,
+            query_plan,
+            "상태별 월별 결제 건수 추이 차트"
+        )
+
+        assert spec["type"] == "chart"
+        assert spec["chart"]["chartType"] == "line"
+        assert spec["chart"]["xAxis"]["dataKey"] == "month"
+        assert len(spec["chart"]["series"]) == 2  # DONE, CANCELED
+
+    def test_single_groupby_no_multi_series(self):
+        """
+        단일 groupBy는 멀티 시리즈가 아님
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"month": "2024-01", "totalAmount": 1000000},
+                    {"month": "2024-02", "totalAmount": 1200000},
+                    {"month": "2024-03", "totalAmount": 1100000}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["month"],
+            "aggregations": [{"function": "sum", "field": "amount", "alias": "totalAmount"}]
+        }
+
+        spec = self.composer.compose(
+            query_result,
+            query_plan,
+            "월별 결제 추이 그래프"
+        )
+
+        assert spec["type"] == "chart"
+        assert spec["chart"]["chartType"] == "line"
+        # 단일 시리즈이므로 isMultiSeries가 False이거나 없음
+        assert spec["metadata"].get("isMultiSeries") is False
+
+    def test_no_trend_keyword_no_multi_series(self):
+        """
+        추이 키워드 없으면 멀티 시리즈 아님 (기본 bar chart)
+        NOTE: "월별", "일별" 등도 line 키워드이므로 제외해야 함
+        """
+        query_result = {
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"merchantId": "M001", "month": "2024-01", "totalAmount": 1000000},
+                    {"merchantId": "M002", "month": "2024-01", "totalAmount": 800000}
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["merchantId", "month"],
+            "aggregations": [{"function": "sum", "field": "amount", "alias": "totalAmount"}]
+        }
+
+        spec = self.composer.compose(
+            query_result,
+            query_plan,
+            "가맹점, 월 기준 결제 금액 그래프"  # 추이/월별 키워드 없음
+        )
+
+        # 추이 키워드 없으면 멀티 시리즈 변환 안 함
+        assert spec["metadata"].get("isMultiSeries") is False
+
+    def test_multi_series_top_5_limit(self):
+        """
+        시리즈가 5개 초과면 상위 5개 + 기타로 그룹화
+        """
+        # 8개 가맹점 데이터
+        rows = []
+        for i in range(1, 9):
+            for month in ["2024-01", "2024-02"]:
+                rows.append({
+                    "merchantId": f"M00{i}",
+                    "month": month,
+                    "totalAmount": 1000000 - (i * 100000)
+                })
+
+        query_result = {
+            "status": "success",
+            "data": {"rows": rows}
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["merchantId", "month"],
+            "aggregations": [{"function": "sum", "field": "amount", "alias": "totalAmount"}]
+        }
+
+        spec = self.composer.compose(
+            query_result,
+            query_plan,
+            "가맹점별 결제금액 추이 그래프"
+        )
+
+        # 시리즈는 최대 6개 (상위 5개 + 기타)
+        assert len(spec["chart"]["series"]) <= 6
+
+        # "기타" 시리즈가 있어야 함
+        series_keys = [s["dataKey"] for s in spec["chart"]["series"]]
+        assert "기타" in series_keys
+
+    def test_identify_multi_series_axis_function(self):
+        """
+        _identify_multi_series_axis 함수 직접 테스트
+        """
+        # 카테고리 + 시계열 + 추이 키워드 -> 멀티 시리즈
+        x_axis, series_key, is_multi = self.composer._identify_multi_series_axis(
+            ["merchantId", "month"],
+            "가맹점별 결제금액 추이 그래프"
+        )
+        assert is_multi is True
+        assert x_axis == "month"
+        assert series_key == "merchantId"
+
+        # 시계열만 -> 멀티 시리즈 아님
+        x_axis, series_key, is_multi = self.composer._identify_multi_series_axis(
+            ["month"],
+            "월별 결제 추이 그래프"
+        )
+        assert is_multi is False
+
+        # 카테고리만 -> 멀티 시리즈 아님
+        x_axis, series_key, is_multi = self.composer._identify_multi_series_axis(
+            ["merchantId"],
+            "가맹점별 결제 추이 그래프"
+        )
+        assert is_multi is False
+
+        # 추이 키워드 없음 -> 멀티 시리즈 아님
+        # NOTE: "월별"은 line 키워드이므로 제외
+        x_axis, series_key, is_multi = self.composer._identify_multi_series_axis(
+            ["merchantId", "month"],
+            "가맹점, 월 기준 결제 금액"  # 추이/월별 키워드 없음
+        )
+        assert is_multi is False
+
+    def test_pivot_data_for_multi_series_function(self):
+        """
+        _pivot_data_for_multi_series 함수 직접 테스트
+        """
+        rows = [
+            {"merchantId": "M001", "month": "2024-01", "totalAmount": 1000000},
+            {"merchantId": "M002", "month": "2024-01", "totalAmount": 800000},
+            {"merchantId": "M001", "month": "2024-02", "totalAmount": 1200000},
+            {"merchantId": "M002", "month": "2024-02", "totalAmount": 900000}
+        ]
+
+        pivoted, series_keys = self.composer._pivot_data_for_multi_series(
+            rows,
+            x_axis_key="month",
+            series_key="merchantId",
+            value_key="totalAmount"
+        )
+
+        # 피벗 결과 확인
+        assert len(pivoted) == 2, "2개월 데이터 = 2행"
+        assert "M001" in series_keys
+        assert "M002" in series_keys
+
+        # 첫 번째 행 (2024-01) 확인
+        jan_row = next(r for r in pivoted if r["month"] == "2024-01")
+        assert jan_row["M001"] == 1000000
+        assert jan_row["M002"] == 800000
+
+
+class TestMultiSeriesSqlRenderComposer:
+    """
+    sql_render_composer.py의 멀티 시리즈 테스트
+    """
+
+    def setup_method(self):
+        from app.services.sql_render_composer import (
+            compose_sql_render_spec,
+            _identify_multi_series_axis,
+            _pivot_data_for_multi_series
+        )
+        self.compose = compose_sql_render_spec
+        self.identify_multi_series_axis = _identify_multi_series_axis
+        self.pivot_data = _pivot_data_for_multi_series
+
+    def test_sql_multi_series_merchant_monthly_trend(self):
+        """
+        SQL 결과에서 가맹점별 월별 추이 멀티 시리즈 차트
+        """
+        result = {
+            "data": [
+                {"merchant_id": "M001", "month": "2024-01", "total_amount": 1000000},
+                {"merchant_id": "M002", "month": "2024-01", "total_amount": 800000},
+                {"merchant_id": "M001", "month": "2024-02", "total_amount": 1200000},
+                {"merchant_id": "M002", "month": "2024-02", "total_amount": 900000}
+            ],
+            "rowCount": 4,
+            "sql": "SELECT merchant_id, month, SUM(amount) FROM payments GROUP BY merchant_id, month",
+            "executionTimeMs": 25
+        }
+
+        spec = self.compose(
+            result,
+            "가맹점별 결제금액 추이 그래프",
+            llm_chart_type="line"
+        )
+
+        assert spec["type"] == "chart"
+        assert spec["chart"]["chartType"] == "line"
+        assert spec["metadata"]["isMultiSeries"] is True
+        assert "series" in spec["chart"]
+
+    def test_sql_identify_multi_series_axis(self):
+        """
+        SQL 결과 컬럼에서 멀티 시리즈 축 식별
+        """
+        columns = ["merchant_id", "month", "total_amount"]
+
+        x_axis, series_key, is_multi = self.identify_multi_series_axis(
+            columns,
+            "가맹점별 결제금액 추이 그래프"
+        )
+
+        assert is_multi is True
+        assert x_axis == "month"
+        assert series_key == "merchant_id"
+
+    def test_sql_pivot_data(self):
+        """
+        SQL 결과 데이터 피벗 테스트
+        """
+        rows = [
+            {"merchant_id": "M001", "month": "2024-01", "total_amount": 1000000},
+            {"merchant_id": "M002", "month": "2024-01", "total_amount": 800000},
+            {"merchant_id": "M001", "month": "2024-02", "total_amount": 1200000},
+            {"merchant_id": "M002", "month": "2024-02", "total_amount": 900000}
+        ]
+
+        pivoted, series_keys = self.pivot_data(
+            rows,
+            x_axis_key="month",
+            series_key="merchant_id",
+            value_key="total_amount"
+        )
+
+        assert len(pivoted) == 2
+        assert "M001" in series_keys
+        assert "M002" in series_keys
+
+
+class TestMultiSeriesSummaryStats:
+    """멀티 시리즈 차트 Summary Stats 테스트"""
+
+    def setup_method(self):
+        from app.services.sql_render_composer import (
+            _calculate_multi_series_stats,
+            _generate_multi_series_summary_stats,
+            _extract_table_from_sql,
+            compose_sql_render_spec
+        )
+        self.calculate_multi_series_stats = _calculate_multi_series_stats
+        self.generate_multi_series_summary_stats = _generate_multi_series_summary_stats
+        self.extract_table_from_sql = _extract_table_from_sql
+        self.compose = compose_sql_render_spec
+
+    def test_calculate_multi_series_stats(self):
+        """
+        멀티 시리즈 통계 계산 - 피벗된 데이터 기준
+        """
+        # 피벗된 데이터 (각 행에 시리즈별 값이 있음)
+        chart_data = [
+            {"month": "2025-08", "가맹점A": 100000000, "가맹점B": 80000000},
+            {"month": "2025-09", "가맹점A": 120000000, "가맹점B": 90000000},
+            {"month": "2025-10", "가맹점A": 150000000, "가맹점B": 100000000},
+            {"month": "2025-11", "가맹점A": 180000000, "가맹점B": 120000000},
+            {"month": "2025-12", "가맹점A": 500000000, "가맹점B": 480000000},  # 피크
+            {"month": "2026-01", "가맹점A": 200000000, "가맹점B": 150000000},
+        ]
+
+        stats = self.calculate_multi_series_stats(
+            chart_data=chart_data,
+            x_key="month",
+            series_keys=["가맹점A", "가맹점B"],
+            chart_type="line"
+        )
+
+        # 피크 시점 확인 (전체 합계가 가장 높은 월)
+        assert stats["peak_time"] == "2025-12"  # 500M + 480M = 980M
+        assert stats["max"] == 980000000
+
+        # 기간 정보
+        assert stats["period_start"] == "2025-08"
+        assert stats["period_end"] == "2026-01"
+
+        # 전체 통계
+        assert stats["count"] == 6
+        assert stats["total"] > 0
+        assert "growth_rate" in stats
+        assert "trend" in stats
+
+    def test_generate_multi_series_summary_stats(self):
+        """
+        멀티 시리즈 Summary Stats 생성 테스트
+        """
+        chart_data = [
+            {"month": "2025-10", "가맹점A": 100000000, "가맹점B": 80000000},
+            {"month": "2025-11", "가맹점A": 150000000, "가맹점B": 100000000},
+            {"month": "2025-12", "가맹점A": 200000000, "가맹점B": 150000000},
+        ]
+
+        summary_stats = self.generate_multi_series_summary_stats(
+            chart_data=chart_data,
+            x_key="month",
+            series_keys=["가맹점A", "가맹점B"],
+            chart_type="line"
+        )
+
+        assert "items" in summary_stats
+        assert len(summary_stats["items"]) >= 4  # trend, peak_time, period, avg
+
+        # 피크 시점 항목 확인
+        peak_item = next((item for item in summary_stats["items"] if item["key"] == "peak_time"), None)
+        assert peak_item is not None
+        assert "2025-12" in peak_item["value"]
+
+    def test_extract_table_from_sql(self):
+        """
+        SQL에서 테이블명 추출 테스트
+        """
+        # 기본 SELECT
+        sql1 = "SELECT * FROM payments WHERE status = 'DONE'"
+        assert self.extract_table_from_sql(sql1) == "payments"
+
+        # 집계 쿼리
+        sql2 = "SELECT merchant_id, SUM(amount) FROM settlements GROUP BY merchant_id"
+        assert self.extract_table_from_sql(sql2) == "settlements"
+
+        # 서브쿼리 (첫 번째 FROM만 추출)
+        sql3 = "SELECT * FROM refunds r JOIN payments p ON r.payment_id = p.id"
+        assert self.extract_table_from_sql(sql3) == "refunds"
+
+        # 빈 문자열
+        assert self.extract_table_from_sql("") is None
+        assert self.extract_table_from_sql(None) is None
+
+    def test_compose_sql_render_spec_includes_data_source(self):
+        """
+        SQL RenderSpec에 dataSource 포함 확인
+        """
+        result = {
+            "data": [
+                {"merchant_id": "M001", "month": "2024-01", "total_amount": 1000000},
+                {"merchant_id": "M002", "month": "2024-01", "total_amount": 800000}
+            ],
+            "rowCount": 2,
+            "sql": "SELECT merchant_id, month, SUM(amount) FROM payments GROUP BY merchant_id, month",
+            "executionTimeMs": 25
+        }
+
+        spec = self.compose(result, "가맹점별 결제금액 추이 그래프", llm_chart_type="line")
+
+        assert spec["type"] == "chart"
+        assert "dataSource" in spec["chart"]
+        assert spec["chart"]["dataSource"]["table"] == "payments"
+        assert spec["chart"]["dataSource"]["rowCount"] == 2
+
+    def test_multi_series_summary_stats_with_pivoted_data(self):
+        """
+        멀티 시리즈 차트에서 피벗된 데이터로 Summary Stats 생성
+        - 그래프와 일치하는 통계 제공 확인
+        """
+        result = {
+            "data": [
+                {"merchant_id": "M001", "month": "2025-08", "total_amount": 100000000},
+                {"merchant_id": "M002", "month": "2025-08", "total_amount": 80000000},
+                {"merchant_id": "M001", "month": "2025-12", "total_amount": 500000000},
+                {"merchant_id": "M002", "month": "2025-12", "total_amount": 480000000},
+            ],
+            "rowCount": 4,
+            "sql": "SELECT merchant_id, month, SUM(amount) FROM payments GROUP BY merchant_id, month",
+            "executionTimeMs": 25
+        }
+
+        spec = self.compose(result, "가맹점별 결제금액 추이 그래프", llm_chart_type="line")
+
+        assert spec["type"] == "chart"
+        assert spec["metadata"]["isMultiSeries"] is True
+
+        # Summary Stats가 멀티 시리즈용으로 생성되었는지 확인
+        summary_stats = spec["chart"]["summaryStats"]
+        assert "items" in summary_stats
+
+        # 피크 시점이 2025-12 (980M = 500M + 480M)
+        peak_item = next((item for item in summary_stats["items"] if item["key"] == "peak_time"), None)
+        if peak_item:
+            assert "2025-12" in peak_item["value"]

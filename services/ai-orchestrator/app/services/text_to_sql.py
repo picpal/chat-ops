@@ -832,7 +832,7 @@ chartType이 line/bar/pie인 경우에만 작성하세요. 플레이스홀더를
 - {metric}: Y축 필드명 (한글)
 
 **예시:**
-- 시계열(line): "{groupBy}별 {metric} 추이입니다. 전체 {count}개 기간 동안 {trend} 추세를 보이며, 최고점은 {max}입니다."
+- 시계열(line): "{groupBy}별 {metric} 추이입니다. 총 {count}개 {groupBy}의 데이터를 분석한 결과, {trend} 추세를 보이며 최고점은 {max}입니다."
 - 비교(bar): "{groupBy}별 {metric} 비교 결과, {maxCategory}가 {max}로 가장 높고, {minCategory}가 {min}로 가장 낮습니다."
 - 분포(pie): "{groupBy}별 {metric} 분포입니다. {maxCategory}가 가장 큰 비중을 차지하며, 총 {count}개 항목이 있습니다."
 """)
