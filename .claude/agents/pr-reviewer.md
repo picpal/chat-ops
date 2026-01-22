@@ -155,8 +155,54 @@ git diff main..HEAD | claude --agent pr-reviewer
 6. 리뷰 결과 출력
 ```
 
+## 7-Phase 워크플로우 통합
+
+### Phase 6 (PR REVIEW) 역할
+
+이 에이전트는 7-Phase 워크플로우의 **Phase 6 (PR REVIEW)**에서 자동 호출됩니다.
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Phase 6: PR REVIEW                                      │
+│                                                         │
+│ 1. git-workflow-manager가 PR 생성 (/cp --pr)            │
+│ 2. pr-reviewer가 리뷰 수행                              │
+│ 3. CHANGES_REQUESTED → 코드 수정 → 재커밋 → 재리뷰      │
+│ 4. APPROVED → Phase 7 (MERGE)로 진행                    │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 반복 프로세스
+
+PR 리뷰에서 CHANGES_REQUESTED가 발생하면:
+
+```
+1. pr-reviewer가 수정 사항 제시
+2. 개발 에이전트 (ai-orchestrator-dev, core-api-dev, frontend-developer)가 코드 수정
+3. /cp로 수정사항 커밋 & 푸시
+4. pr-reviewer가 재리뷰
+5. APPROVED될 때까지 반복
+```
+
+### 승인 기준 (Phase 6 → Phase 7 전환 조건)
+
+| 조건 | 기준값 |
+|------|--------|
+| CRITICAL 이슈 | 0개 |
+| WARNING 이슈 | 3개 이하 |
+| 신규 기능 테스트 | 존재 |
+| 빌드/린트 | 통과 |
+
+### 워크플로우 연동
+
+| 이전 Phase | 현재 | 다음 Phase |
+|------------|------|------------|
+| 5. TEST (통과) | 6. PR REVIEW | 7. MERGE |
+| 5. TEST (통과) | 6. PR REVIEW (CHANGES_REQUESTED) | → 4. IMPLEMENT (수정) → 5. TEST → 6. PR REVIEW |
+
 ## 참고 자료
 
 - 프로젝트 규칙: `/CLAUDE.md`
 - 스키마 정의: `/libs/contracts/`
 - 리뷰 가이드: `/.github/review-prompt.md`
+- Git 워크플로우: `/.claude/agents/git-workflow-manager.md`

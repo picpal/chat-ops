@@ -75,14 +75,28 @@ See: infra/docker/.env.example
 - Migration errors: check Flyway logs and db/migration order
 - Slow queries: ensure time range filter + limit are enforced
 
-## 8. Plan First 원칙 (필수)
+## 8. Development Workflow (7-Phase Process)
 
-**복잡한 작업은 반드시 계획을 먼저 수립하라**
+**복잡한 작업은 7단계 워크플로우를 따른다**
 
-### 언제 Plan Mode를 사용하는가?
+### 워크플로우 다이어그램
 
-| 조건 | Plan Mode 필요 |
-|------|---------------|
+```
+┌──────────────────────────────────────────────────────────────┐
+│  1. ANALYZE     → code-analyzer로 영향 범위 분석            │
+│  2. PLAN        → EnterPlanMode로 계획 수립                 │
+│  3. APPROVE     → 사용자 승인 + Feature 브랜치 생성         │
+│  4. IMPLEMENT   → 개발 에이전트로 구현 (병렬 가능)          │
+│  5. TEST        → tester로 테스트 (실패시 4로 회귀)         │
+│  6. PR REVIEW   → PR 생성 + pr-reviewer (수정시 4로 회귀)   │
+│  7. MERGE       → PR 머지 + 브랜치/Worktree 정리            │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 언제 7-Phase 워크플로우를 사용하는가?
+
+| 조건 | 7-Phase 필요 |
+|------|--------------|
 | 여러 파일 수정이 필요한 기능 | ✅ 필수 |
 | 기존 코드 수정/개선/리팩토링 | ✅ 필수 |
 | 새로운 기능 추가 | ✅ 필수 |
@@ -90,46 +104,66 @@ See: infra/docker/.env.example
 | 단순 오타/설정값 수정 | ❌ 불필요 |
 | 파일 조회/질문 응답 | ❌ 불필요 |
 
-### Plan Mode 워크플로우
+### 각 Phase 상세
+
+#### Phase 1: ANALYZE
+- `code-analyzer` 에이전트로 영향 범위 분석
+- 관련 파일, 의존성, 아키텍처 영향 파악
+
+#### Phase 2: PLAN
+- `EnterPlanMode`로 계획 수립
+- 변경 파일 목록, 구현 단계, 테스트 계획 작성
+- 계획서는 `.claude/plan.md`에 작성
+
+#### Phase 3: APPROVE
+- `ExitPlanMode`로 사용자 승인 요청
+- 승인 후 `git-workflow-manager`로 Feature 브랜치 생성
+- 브랜치 네이밍: `<type>/<issue-number>-<description>`
+
+#### Phase 4: IMPLEMENT
+- 개발 에이전트로 구현 (`ai-orchestrator-dev`, `core-api-dev`, `frontend-developer`)
+- 서비스 간 의존성 없으면 병렬 실행 가능
+
+#### Phase 5: TEST (반복 단계)
+- `tester` 에이전트로 테스트 실행
+- 실패 시 → 코드 수정 → 재테스트 (Phase 4로 회귀)
+- **통과 기준:**
+  - [ ] 단위 테스트 100% 통과
+  - [ ] 빌드 성공
+  - [ ] 린트 에러 없음
+
+#### Phase 6: PR REVIEW (반복 단계)
+- `git-workflow-manager`로 PR 생성 (`/cp --pr` 또는 `/pr`)
+- `pr-reviewer` 에이전트로 리뷰 수행
+- CHANGES_REQUESTED → 코드 수정 → 재커밋 → 재리뷰 (Phase 4로 회귀)
+- **승인 기준:**
+  - [ ] CRITICAL 이슈 0개
+  - [ ] WARNING 이슈 3개 이하
+
+#### Phase 7: MERGE
+- PR 머지 (squash merge 권장)
+- 브랜치/Worktree 정리
+
+### Git Worktree 사용 시점
+
+| 시나리오 | Worktree 사용 |
+|----------|---------------|
+| 단일 기능 개발 | ❌ 불필요 |
+| 복수 기능 병렬 개발 | ✅ 권장 |
+| 긴급 핫픽스 (작업 중 다른 기능 진행) | ✅ 필수 |
+
+### 브랜치 네이밍 컨벤션
 
 ```
-1. 요청 접수
-   ↓
-2. 코드 분석 (code-analyzer 에이전트 활용)
-   - 관련 파일 파악
-   - 의존성 분석
-   - 영향 범위 확인
-   ↓
-3. 계획 수립 (EnterPlanMode)
-   - 변경 파일 목록
-   - 구현 단계
-   - 테스트 계획
-   ↓
-4. 사용자 승인 (ExitPlanMode)
-   ↓
-5. 구현 (개발 에이전트 활용)
-   ↓
-6. 테스트 (tester 에이전트)
+<type>/<issue-number>-<description>
+
+예시:
+- feat/123-payment-api
+- fix/456-pagination-bug
+- refactor/789-query-service
 ```
 
-### EnterPlanMode 사용 예시
-
-```
-사용자: "결제 API에 새로운 필드 추가해줘"
-
-Claude:
-1. code-analyzer로 관련 코드 분석
-2. EnterPlanMode 진입
-3. 계획서 작성:
-   - 변경 파일: PaymentDTO.java, payments API, UI 컴포넌트
-   - 단계: DTO 수정 → API 수정 → UI 반영 → 테스트
-4. ExitPlanMode로 승인 요청
-5. 승인 후 구현 진행
-```
-
-### Plan 작성 위치
-
-계획서는 `.claude/plan.md` 파일에 작성됩니다.
+Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
 
 ---
 
@@ -137,23 +171,33 @@ Claude:
 
 프로젝트에 설정된 에이전트를 **적극 활용**하세요.
 
+### Phase-Agent 매핑
+
+| Phase | 담당 에이전트 |
+|-------|--------------|
+| 1. ANALYZE | `code-analyzer` |
+| 2. PLAN | Main Agent (`EnterPlanMode`) |
+| 3. APPROVE | 사용자 + `git-workflow-manager` |
+| 4. IMPLEMENT | `ai-orchestrator-dev`, `core-api-dev`, `frontend-developer` |
+| 5. TEST | `tester` |
+| 6. PR REVIEW | `git-workflow-manager` + `pr-reviewer` |
+| 7. MERGE | `git-workflow-manager` |
+
 ### Agent First 원칙 (필수)
 
 **"작업 전, 해당 에이전트가 있는지 먼저 확인하라"**
-
-```
-작업 요청 → 코드 분석 → 계획 수립 → 에이전트로 구현 → 테스트
-```
 
 #### 에이전트 사용 판단 기준
 
 | 질문 | Yes → 에이전트 사용 |
 |------|---------------------|
 | 코드 구조/의존성 분석이 필요한가? | `code-analyzer` |
+| Git 브랜치/PR/Worktree 관리가 필요한가? | `git-workflow-manager` |
 | 코드 수정 후 테스트가 필요한가? | `tester` |
 | 특정 서비스(AI/Core API/UI) 코드를 수정하는가? | `ai-orchestrator-dev`, `core-api-dev`, `frontend-developer` |
 | 서버 상태 확인/제어가 필요한가? | `server-ops-controller` |
 | 오류 원인 파악이 필요한가? | `log-analyzer` |
+| PR 리뷰가 필요한가? | `pr-reviewer` |
 | 문서 작성이 필요한가? | `project-doc-writer` |
 
 #### 직접 작업해도 되는 경우
@@ -161,66 +205,46 @@ Claude:
 - 파일 내용 단순 조회
 - 간단한 질문 응답
 
-#### 에이전트 활용 이점
-- **전문화된 컨텍스트**: 각 에이전트는 해당 도메인의 베스트 프랙티스 내장
-- **일관된 워크플로우**: 수정 → 테스트 → 검증 자동화
-- **품질 보장**: 테스트 누락 방지, 문서화 자동화
+### 병렬 실행 조건
 
-#### 병렬 에이전트 활용
-독립적인 작업은 **병렬로 에이전트 실행**하여 효율성 극대화:
+서비스 간 의존성 없을 때 병렬 실행 가능:
+- `ai-orchestrator-dev` ∥ `core-api-dev`
+- `core-api-dev` ∥ `frontend-developer`
+- `ai-orchestrator-dev` ∥ `frontend-developer`
+
 ```
 예: AI Orchestrator 수정 + Core API 수정이 동시에 필요한 경우
 → ai-orchestrator-dev와 core-api-dev를 병렬 실행
 ```
 
+### 반복 프로세스
+
+#### TEST 실패 시 (Phase 5)
+```
+개발 에이전트로 수정 → tester로 재테스트 → 통과까지 반복
+```
+
+#### PR CHANGES_REQUESTED 시 (Phase 6)
+```
+개발 에이전트로 수정 → 커밋 → pr-reviewer로 재리뷰 → APPROVED까지 반복
+```
+
 ### 에이전트 목록 및 사용 시점
 
-| 에이전트 | 용도 | 사용 시점 |
-|---------|------|----------|
-| **code-analyzer** | 코드 분석, 의존성 파악, 영향 범위 분석 | **구현 전 필수** - 수정/개선/신규 기능 작업 시 |
-| server-ops-controller | 서버 시작/중지/재시작/상태확인 | 개발 시작/종료, 서비스 문제 발생 시 |
-| ai-orchestrator-dev | AI Orchestrator (Python/FastAPI) 개발 | LLM 프롬프트, Text-to-SQL, RAG, SQL Validator 작업 |
-| core-api-dev | Core API (Java/Spring Boot) 개발 | REST API, QueryPlan 검증, SQL Builder, DB 마이그레이션 |
-| tester | 전체 테스트 관할 (Python/Java/React) | 코드 수정 후 테스트 실행, E2E 테스트 |
-| log-analyzer | 로그 분석 및 디버깅 | 오류 발생 시, 동작 확인 필요 시 |
-| frontend-developer | React UI 개발 | 프론트엔드 컴포넌트/페이지 작업 |
-| project-doc-writer | 문서 작성 | 개발 계획서, ADR, 기술 문서 작성 |
-| work-logger | 작업 기록 | 작업 완료 후 기록 필요 시 |
-| file-explorer | 파일 탐색 | 파일 위치 찾기, 프로젝트 구조 파악 |
-
-### 워크플로우 예시
-
-**신규 기능 / 수정 / 개선 (공통):**
-| 단계 | 에이전트/도구 | 필수 |
-|------|--------------|------|
-| 1. 코드 분석 | `code-analyzer` | ✅ |
-| 2. 계획 수립 | `EnterPlanMode` | ✅ |
-| 3. 사용자 승인 | `ExitPlanMode` | ✅ |
-| 4. 구현 | 개발 에이전트 | ✅ |
-| 5. 테스트 | `tester` | ✅ |
-| 6. 문서화 | `project-doc-writer` | - |
-
-**프론트엔드 개발:**
-| 단계 | 에이전트 | 필수 |
-|------|----------|------|
-| 1. 코드 분석 | `code-analyzer` | ✅ |
-| 2. 계획 수립/승인 | `EnterPlanMode` → `ExitPlanMode` | ✅ |
-| 3. 서버 시작 | `server-ops-controller` | ✅ |
-| 4. UI 컴포넌트 작업 | `frontend-developer` | ✅ |
-| 5. 테스트 실행 | `tester` | ✅ |
-| 6. 오류 분석 (필요시) | `log-analyzer` | - |
-
-**백엔드 개발:**
-| 단계 | 에이전트 | 필수 |
-|------|----------|------|
-| 1. 코드 분석 | `code-analyzer` | ✅ |
-| 2. 계획 수립/승인 | `EnterPlanMode` → `ExitPlanMode` | ✅ |
-| 3. 서버 시작 | `server-ops-controller` | ✅ |
-| 4. AI/Core API 작업 | `ai-orchestrator-dev` / `core-api-dev` | ✅ |
-| 5. 테스트 실행 | `tester` | ✅ |
-| 6. 오류 분석 (필요시) | `log-analyzer` | - |
-
-**중요: 구현 전 반드시 code-analyzer로 분석 + 계획 수립**
+| 에이전트 | 용도 | Phase |
+|---------|------|-------|
+| **code-analyzer** | 코드 분석, 의존성 파악, 영향 범위 분석 | 1. ANALYZE |
+| **git-workflow-manager** | Git 브랜치, Worktree, PR 관리 | 3, 6, 7 |
+| server-ops-controller | 서버 시작/중지/재시작/상태확인 | 4. IMPLEMENT |
+| ai-orchestrator-dev | AI Orchestrator (Python/FastAPI) 개발 | 4. IMPLEMENT |
+| core-api-dev | Core API (Java/Spring Boot) 개발 | 4. IMPLEMENT |
+| frontend-developer | React UI 개발 | 4. IMPLEMENT |
+| **tester** | 전체 테스트 관할 (Python/Java/React) | 5. TEST |
+| **pr-reviewer** | PR 코드 리뷰 | 6. PR REVIEW |
+| log-analyzer | 로그 분석 및 디버깅 | 디버깅 시 |
+| project-doc-writer | 문서 작성 | 문서화 시 |
+| work-logger | 작업 기록 | 작업 완료 후 |
+| file-explorer | 파일 탐색 | 파일 위치 찾기 |
 
 ### 주의사항
 
