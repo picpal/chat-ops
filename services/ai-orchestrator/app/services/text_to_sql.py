@@ -474,7 +474,7 @@ SCHEMA_PROMPT = """
 | order_name | VARCHAR(200) | 주문명 |
 | amount | BIGINT | 결제 금액 |
 | method | VARCHAR(30) | 결제 수단: CARD, VIRTUAL_ACCOUNT, EASY_PAY, TRANSFER, MOBILE |
-| status | VARCHAR(30) | 상태: READY, IN_PROGRESS, DONE, CANCELED, PARTIAL_CANCELED, FAILED, EXPIRED |
+| status | VARCHAR(30) | 상태: READY, IN_PROGRESS, WAITING_FOR_DEPOSIT, DONE, CANCELED, PARTIAL_CANCELED, ABORTED, EXPIRED |
 | approved_at | TIMESTAMPTZ | 결제 승인 시간 |
 | failure_code | VARCHAR(50) | 실패 코드 |
 | failure_message | TEXT | 실패 메시지 |
@@ -767,7 +767,19 @@ class TextToSqlService:
         current_date = datetime.now().strftime('%Y-%m-%d')
         prompt_parts.append(f"현재 날짜: {current_date}")
 
-        # 시스템 지시 (간결하게)
+        # 시간 조회 규칙 (현재 날짜 주입) - f-string 사용
+        time_rules = f"""
+## 시간 조회 규칙 (매우 중요!)
+- 기본: created_at 사용
+- "승인일 기준", "매출 기준" → approved_at 사용
+- **"오늘", "금일", "당일"** → created_at >= '{current_date}' AND created_at < '{current_date}'::date + 1
+- "어제" → created_at >= '{current_date}'::date - 1 AND created_at < '{current_date}'
+- "최근 N개월" → created_at >= NOW() - INTERVAL 'N months'
+
+**필수**: 사용자가 "오늘"을 언급하면 반드시 날짜 조건 created_at >= '{current_date}'를 포함하세요!
+"""
+
+        # 시스템 지시 (간결하게) - 일반 문자열 사용 (플레이스홀더 충돌 방지)
         prompt_parts.append("""
 당신은 PostgreSQL SQL 전문가입니다.
 사용자의 자연어 질문을 분석하여 정확한 SELECT 쿼리를 생성합니다.
@@ -777,13 +789,8 @@ class TextToSqlService:
 - 테이블/컬럼명은 snake_case 사용
 - 문자열 비교 시 정확한 값 사용 (예: status = 'DONE')
 - LIMIT: 사용자가 건수를 명시한 경우에만 추가
-
-## 시간 조회 규칙
-- 기본: created_at 사용
-- "승인일 기준", "매출 기준" → approved_at 사용
-- "오늘" → created_at >= '현재날짜'
-- "최근 N개월" → created_at >= NOW() - INTERVAL 'N months'
-
+- 결제 실패/오류 조회: status='ABORTED' 사용, "상세" 키워드 시 failure_code와 failure_message 모두 SELECT
+""" + time_rules + """
 ## 시간 그룹핑 시 포맷팅 (중요!)
 GROUP BY로 시간을 묶을 때, 사용자가 읽기 쉬운 형태로 포맷팅하세요:
 - 월별: TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month
