@@ -609,11 +609,26 @@ SCHEMA_PROMPT = """
 ### 상태 필터
 - status 필드는 대문자 영문 (예: 'DONE', 'CANCELED')
 
-### JOIN 관계
+### JOIN 관계 (중요!)
 - payments.merchant_id -> merchants.merchant_id
 - payments.payment_key -> refunds.payment_key
+- payments.payment_key -> payment_history.payment_key (결제 → 상태이력)
 - settlements.merchant_id -> merchants.merchant_id
 - settlement_details.settlement_id -> settlements.settlement_id
+
+### failure_code 필드 위치 (주의!)
+- payments.failure_code: 결제 실패 코드 (status='ABORTED' 상태에서)
+- refunds.failure_code: 환불 실패 코드 (없음)
+- **payment_history에는 failure_code 컬럼 없음!**
+  → 실패 결제의 상태 이력 조회 시 반드시 payments와 JOIN 필요
+  → 예: SELECT ph.* FROM payment_history ph JOIN payments p ON ph.payment_key = p.payment_key WHERE p.failure_code = 'INVALID_CARD'
+
+### 집계 결과 기반 상세 조회 규칙
+이전 쿼리가 집계(GROUP BY)였고, 꼬리 질문이 특정 그룹값의 상세 조회인 경우:
+- 집계에서 그룹핑된 컬럼 값을 WHERE 조건으로 변환
+- 예: "INVALID_CARD 오류로 집계된 결제건의 상세이력"
+  → WHERE p.failure_code = 'INVALID_CARD' 조건 적용
+  → payments와 payment_history 조인
 """
 
 
@@ -789,7 +804,7 @@ class TextToSqlService:
 - 테이블/컬럼명은 snake_case 사용
 - 문자열 비교 시 정확한 값 사용 (예: status = 'DONE')
 - LIMIT: 사용자가 건수를 명시한 경우에만 추가
-- 결제 실패/오류 조회: status='ABORTED' 사용, "상세" 키워드 시 failure_code와 failure_message 모두 SELECT
+- 결제 실패/오류 조회: status='ABORTED' 사용, "상세" 키워드 시 failure_code와 failure_message 모두 SELECT, "건수" 키워드 시 COUNT(*) 집계 + GROUP BY 필수
 """ + time_rules + """
 ## 시간 그룹핑 시 포맷팅 (중요!)
 GROUP BY로 시간을 묶을 때, 사용자가 읽기 쉬운 형태로 포맷팅하세요:

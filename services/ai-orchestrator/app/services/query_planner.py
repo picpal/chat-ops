@@ -36,6 +36,42 @@ OPERATOR_ALIASES = {
 }
 
 
+# ============================================
+# 집계 → 상세 조회 패턴 감지 (TC-014)
+# ============================================
+
+# 집계 결과에서 특정 값의 상세 조회를 요청하는 패턴
+AGGREGATION_TO_DETAIL_PATTERNS = [
+    r"집계된.*상세",           # "집계된 결제건의 상세"
+    r"집계된.*조회",           # "집계된 것들 조회"
+    r"집계된.*이력",           # "집계된 결제의 이력"
+    r"위 결과.*상세",          # "위 결과의 상세"
+    r"해당.*상세.*조회",       # "해당 건들의 상세 조회"
+    r"결제.*상세.*이력",       # "결제 상세이력"
+    r"이력.*조회",             # "이력 조회"
+]
+
+
+def is_aggregation_to_detail_request(message: str) -> bool:
+    """
+    집계 결과 기반 상세 조회 요청인지 감지
+
+    예: "INVALID_CARD 오류로 집계된 결제건의 상세이력 조회"
+
+    Args:
+        message: 사용자 메시지
+
+    Returns:
+        집계→상세 패턴 매칭 여부
+    """
+    import re
+    for pattern in AGGREGATION_TO_DETAIL_PATTERNS:
+        if re.search(pattern, message, re.IGNORECASE):
+            logger.info(f"[Aggregation-to-Detail] Matched pattern: {pattern}")
+            return True
+    return False
+
+
 def normalize_operator(operator: str) -> str:
     """
     잘못된 operator를 정규화
@@ -178,6 +214,7 @@ class IntentType(str, Enum):
     QUERY_NEEDED = "query_needed"      # DB 조회 필요 → QueryPlan 생성
     FILTER_LOCAL = "filter_local"      # 이전 결과 필터링
     AGGREGATE_LOCAL = "aggregate_local"  # 이전 결과 집계
+    DAILY_CHECK = "daily_check"        # 템플릿 기반 일일점검
 
 
 class IntentClassification(BaseModel):
@@ -188,6 +225,10 @@ class IntentClassification(BaseModel):
     direct_answer_text: Optional[str] = Field(
         default=None,
         description="intent가 direct_answer일 때, 생성된 답변"
+    )
+    check_date: Optional[str] = Field(
+        default=None,
+        description="intent가 daily_check일 때, 점검 대상 날짜 (YYYY-MM-DD 형식)"
     )
 
 
@@ -511,6 +552,21 @@ class QueryPlannerService:
 - 새로운 데이터 조회 필요
 - "최근 거래 30건", "환불 내역 조회"
 
+### 5. daily_check (템플릿 기반 일일점검)
+- 키워드: "일일점검", "데일리체크", "daily check", "종합 현황", "대시보드"
+- 특징: 정해진 형식의 복합 리포트 요청
+- 예시:
+  - "오늘 일자 기준으로 거래 및 결제 데이터 일일점검 해줘" → daily_check
+  - "어제 결제 현황 점검해줘" → daily_check (check_date: 어제 날짜)
+  - "일일점검" → daily_check
+  - "daily check" → daily_check
+  - "종합 현황 보여줘" → daily_check
+- check_date: 점검 대상 날짜 추출 규칙:
+  - "오늘", "당일", "금일" 또는 날짜 미명시 → null (코드에서 오늘 날짜 사용)
+  - "어제" → 어제 날짜 (YYYY-MM-DD)
+  - 특정 날짜 언급 시 → 해당 날짜 (YYYY-MM-DD)
+  - 절대 임의의 날짜를 생성하지 말 것!
+
 ## 중요한 판단 규칙 - 반드시 순서대로 확인!
 
 **Step 1**: 이전 결과가 **테이블(목록)**인가, **집계 결과(텍스트)**인가?
@@ -612,13 +668,29 @@ intent가 "direct_answer"이면 **반드시** direct_answer_text에 계산된 �
 | 총액 $3,000,000 | "VAT 10% 포함하면?" | direct_answer | 집계 결과에 세금 계산 |
 | 평균 $150,000 | "이게 무슨 의미야?" | direct_answer | 설명 요청 |
 
-### query_needed 예시 (4개)
+### query_needed 예시 (7개)
 | 이전 컨텍스트 | 사용자 입력 | intent | reasoning |
 |--------------|------------|--------|-----------|
 | Payment 조회 후 | "환불 내역도 조회해줘" | query_needed | 다른 엔티티(Refund) 조회 |
 | 어떤 결과든 | "새로 조회해줘" | query_needed | "새로" 키워드 = 새 쿼리 |
 | 결과 있음 | "처음부터 100만원 이상만" | query_needed | "처음부터" = DB 재조회 |
 | 없음 | "정산 현황 알려줘" | query_needed | 새로운 조회 요청 |
+| **오류 집계 후** | "INVALID_CARD 오류 결제건의 상세이력 조회" | query_needed | **집계→상세: payment_history JOIN 필요** |
+| **failure_code 집계 후** | "집계된 결제건의 상세 조회" | query_needed | **집계 결과에서 상세 데이터 재조회** |
+| **GROUP BY 결과 후** | "해당 건들의 결제 이력" | query_needed | **다른 엔티티(payment_history) 조인 필요** |
+
+### CASE 6: 집계 결과 기반 상세 조회 (TC-014) - 중요!
+이전 쿼리가 GROUP BY 집계였고, 특정 그룹값의 상세 조회를 요청하는 경우:
+| 상황 | 분류 | SQL 힌트 |
+|------|------|----------|
+| "INVALID_CARD 오류로 집계된 결제건의 상세이력" | query_needed | payments JOIN payment_history, WHERE failure_code='INVALID_CARD' |
+| "위 집계 결과 중 DONE 상태의 상세 조회" | query_needed | WHERE status='DONE' 조건 유지 + 상세 컬럼 선택 |
+| "집계된 건들의 결제 이력" | query_needed | 집계 WHERE 조건 유지 + payment_history 조인 |
+
+**핵심 규칙:**
+- 집계 결과는 그룹핑된 요약이므로, 상세 데이터는 DB 재조회 필수
+- GROUP BY 컬럼 값(예: failure_code='INVALID_CARD')을 WHERE 조건으로 변환
+- 다른 엔티티(예: payment_history) 조회 시 적절한 JOIN 필요
 
 ### Negative 예시 (잘못된 분류 방지)
 | 상황 | 잘못된 분류 | 올바른 분류 | 이유 |
@@ -630,10 +702,11 @@ intent가 "direct_answer"이면 **반드시** direct_answer_text에 계산된 �
 
 응답은 반드시 JSON 형식으로:
 {{
-    "intent": "direct_answer" | "query_needed" | "filter_local" | "aggregate_local",
+    "intent": "direct_answer" | "query_needed" | "filter_local" | "aggregate_local" | "daily_check",
     "confidence": 0.0 ~ 1.0,
     "reasoning": "판단 근거 (1-2문장)",
-    "direct_answer_text": "direct_answer인 경우 **반드시 계산된 답변** 작성, 다른 intent면 null"
+    "direct_answer_text": "direct_answer인 경우 **반드시 계산된 답변** 작성, 다른 intent면 null",
+    "check_date": "daily_check인 경우만: 오늘/당일/금일/미명시→null, 어제→어제날짜, 특정날짜→해당날짜"
 }}
 """
 

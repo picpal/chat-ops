@@ -32,7 +32,7 @@ class TestParseLLMResponse:
   "chartReason": "시계열 데이터 + 추이 키워드"
 }
 ```'''
-        sql, chart_type, chart_reason, _ = text_to_sql_service._parse_llm_response(response)
+        sql, chart_type, chart_reason, insight_template, summary_stats_template = text_to_sql_service._parse_llm_response(response)
 
         assert sql == "SELECT * FROM payments;"
         assert chart_type == "line"
@@ -42,7 +42,7 @@ class TestParseLLMResponse:
         """직접 JSON 형식 파싱"""
         response = '''{"sql": "SELECT COUNT(*) FROM refunds;", "chartType": "bar", "chartReason": "카테고리 비교"}'''
 
-        sql, chart_type, chart_reason, _ = text_to_sql_service._parse_llm_response(response)
+        sql, chart_type, chart_reason, insight_template, summary_stats_template = text_to_sql_service._parse_llm_response(response)
 
         assert sql == "SELECT COUNT(*) FROM refunds;"
         assert chart_type == "bar"
@@ -57,7 +57,7 @@ class TestParseLLMResponse:
   "chartReason": "차트 요청 키워드 없음"
 }
 ```'''
-        sql, chart_type, chart_reason, _ = text_to_sql_service._parse_llm_response(response)
+        sql, chart_type, chart_reason, insight_template, summary_stats_template = text_to_sql_service._parse_llm_response(response)
 
         assert sql == "SELECT * FROM merchants;"
         assert chart_type == "none"
@@ -68,7 +68,7 @@ class TestParseLLMResponse:
         response = '''```sql
 SELECT * FROM payments WHERE status = 'DONE';
 ```'''
-        sql, chart_type, chart_reason, _ = text_to_sql_service._parse_llm_response(response)
+        sql, chart_type, chart_reason, insight_template, summary_stats_template = text_to_sql_service._parse_llm_response(response)
 
         assert "SELECT * FROM payments" in sql
         assert chart_type is None
@@ -78,7 +78,7 @@ SELECT * FROM payments WHERE status = 'DONE';
         """순수 SQL 문자열 (폴백)"""
         response = "SELECT merchant_id, SUM(amount) FROM payments GROUP BY merchant_id;"
 
-        sql, chart_type, chart_reason, _ = text_to_sql_service._parse_llm_response(response)
+        sql, chart_type, chart_reason, insight_template, summary_stats_template = text_to_sql_service._parse_llm_response(response)
 
         assert sql == "SELECT merchant_id, SUM(amount) FROM payments GROUP BY merchant_id;"
         assert chart_type is None
@@ -93,7 +93,7 @@ SELECT * FROM payments WHERE status = 'DONE';
   "chartReason": "비율/분포 키워드"
 }
 ```'''
-        sql, chart_type, chart_reason, _ = text_to_sql_service._parse_llm_response(response)
+        sql, chart_type, chart_reason, insight_template, summary_stats_template = text_to_sql_service._parse_llm_response(response)
 
         assert chart_type == "pie"
 

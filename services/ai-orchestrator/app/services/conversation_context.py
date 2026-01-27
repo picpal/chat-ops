@@ -333,6 +333,24 @@ def build_conversation_context(history: List["ChatMessageItem"]) -> str:
     context += "   - 집계결과 + '필터링' -> query_needed (집계 결과는 필터 불가)\n"
     context += "4. **엔티티 유지**: 후속 질문에서 다른 엔티티로 변경하려면 명시적 표현 필요\n"
 
+    # ============================================
+    # 집계 결과 기반 상세 조회 규칙 (TC-014)
+    # ============================================
+    context += "\n### 집계 결과 기반 상세 조회 규칙 (꼬리 질문)\n"
+    context += "**이전 쿼리가 GROUP BY 집계였고, 특정 그룹값의 상세 조회 요청 시:**\n"
+    context += "1. **집계 필터 → WHERE 변환**:\n"
+    context += "   - 'INVALID_CARD 오류로 집계된' → failure_code = 'INVALID_CARD'\n"
+    context += "   - 'DONE 상태인 것들' → status = 'DONE'\n"
+    context += "   - GROUP BY 컬럼 값을 WHERE 조건으로 자동 변환\n"
+    context += "2. **다른 엔티티 조회 시 JOIN 필수**:\n"
+    context += "   - '결제 상세이력' 요청 → payment_history 조회 필요\n"
+    context += "   - payments와 payment_history를 payment_key로 JOIN\n"
+    context += "   - 집계 필터 조건(failure_code 등)은 payments 테이블에 적용\n"
+    context += "3. **예시 SQL 패턴**:\n"
+    context += "   - SELECT ph.* FROM payment_history ph\n"
+    context += "   - JOIN payments p ON ph.payment_key = p.payment_key\n"
+    context += "   - WHERE p.failure_code = 'INVALID_CARD' AND p.created_at >= '...'\n"
+
     return context
 
 
@@ -357,7 +375,9 @@ def extract_previous_results(history: List["ChatMessageItem"]) -> List[Dict[str,
                 "count": 0,
                 "aggregation": None,
                 "data_summary": None,  # 실제 데이터 요약
-                "total_amount": None   # 금액 합계 (있는 경우)
+                "total_amount": None,  # 금액 합계 (있는 경우)
+                "groupByColumns": None,  # GROUP BY 컬럼들
+                "groupByValues": None,   # GROUP BY 결과 값들
             }
 
             # QueryResult가 있으면 조회 결과
@@ -366,6 +386,28 @@ def extract_previous_results(history: List["ChatMessageItem"]) -> List[Dict[str,
                 result_info["count"] = msg.queryResult.get("totalCount", 0)
                 if msg.queryPlan:
                     result_info["entity"] = msg.queryPlan.get("entity", "unknown")
+
+                # 집계 쿼리 메타데이터 추출 (GROUP BY 정보) - TC-014 지원
+                is_aggregation = msg.queryResult.get("isAggregation", False)
+                agg_context = msg.queryResult.get("aggregationContext", {})
+
+                if is_aggregation and agg_context.get("hasGroupBy"):
+                    group_by_columns = agg_context.get("groupByColumns", [])
+                    result_info["groupByColumns"] = group_by_columns
+                    logger.info(f"[extract_previous_results] msg #{i} is aggregation with GROUP BY: {group_by_columns}")
+
+                    # 결과 데이터에서 GROUP BY 값들 추출 (꼬리 질문 지원)
+                    data_obj = msg.queryResult.get("data", {})
+                    rows = data_obj.get("rows", []) if isinstance(data_obj, dict) else []
+                    if rows and group_by_columns:
+                        # 첫 번째 그룹 컬럼의 값들 추출
+                        group_col = group_by_columns[0]
+                        group_values = []
+                        for row in rows:
+                            if isinstance(row, dict) and group_col in row and row[group_col]:
+                                group_values.append(row[group_col])
+                        result_info["groupByValues"] = group_values
+                        logger.info(f"[extract_previous_results] msg #{i} GROUP BY values: {group_values}")
 
                 # 실제 데이터에서 금액 합계 추출
                 data_obj = msg.queryResult.get("data", {})
@@ -445,7 +487,8 @@ def extract_previous_results(history: List["ChatMessageItem"]) -> List[Dict[str,
             # 조회 결과나 집계 결과가 있으면 추가
             if result_info["count"] > 0 or result_info["aggregation"]:
                 results.append(result_info)
-                logger.info(f"[extract_previous_results] Added result #{len(results)}: entity={result_info['entity']}, count={result_info['count']}, total_amount={result_info['total_amount']}")
+                group_info = f", groupBy={result_info.get('groupByColumns')}" if result_info.get('groupByColumns') else ""
+                logger.info(f"[extract_previous_results] Added result #{len(results)}: entity={result_info['entity']}, count={result_info['count']}, total_amount={result_info['total_amount']}{group_info}")
 
     logger.info(f"[extract_previous_results] Total results extracted: {len(results)}")
     return results
