@@ -274,7 +274,7 @@ AI Orchestrator는 다음 역할을 성공적으로 수행:
 1. **자연어 이해**: "최근 1주일간 결제건 20건" → Payment, list, limit:20, timeRange 계산
 2. **구조화된 쿼리 생성**: Pydantic 모델 기반 QueryPlan (LLM structured output)
 3. **현재 날짜 인식**: 시스템 프롬프트에 현재 날짜 정보 포함하여 정확한 timeRange 생성
-4. **Core API 연동**: QueryPlan → SQL → 데이터 조회 → QueryResult
+4. **Core API 연동**: QueryPlan → SQL → 데이터 조회 → Quer
 5. **RenderSpec 생성**: 프론트엔드 렌더링 가능한 형태로 변환 (테이블, 차트 등)
 6. **페이지네이션 지원**: queryToken 기반 서버 사이드 페이지네이션
 

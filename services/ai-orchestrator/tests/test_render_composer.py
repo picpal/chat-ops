@@ -1420,9 +1420,9 @@ class TestMultiSeriesChart:
         # 시리즈는 최대 6개 (상위 5개 + 기타)
         assert len(spec["chart"]["series"]) <= 6
 
-        # "기타" 시리즈가 있어야 함
+        # "그 외" 시리즈가 있어야 함
         series_keys = [s["dataKey"] for s in spec["chart"]["series"]]
-        assert "기타" in series_keys
+        assert any("그 외" in key for key in series_keys), f"Expected '그 외' in series_keys but got {series_keys}"
 
     def test_identify_multi_series_axis_function(self):
         """

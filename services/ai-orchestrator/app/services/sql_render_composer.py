@@ -172,7 +172,7 @@ def _identify_multi_series_axis(
     date_fields = [col for col in columns if col.lower() in [f.lower() for f in DATE_FIELDS]]
     category_fields = [col for col in columns if col.lower() in [f.lower() for f in CATEGORY_FIELDS]]
 
-    # 추이/트렌드 키워드 감지
+    # 추이/트렌드 키워드 감지 (로깅용)
     trend_keywords = CHART_TYPE_KEYWORDS.get("line", [])
     message_lower = user_message.lower()
     has_trend = any(kw in message_lower for kw in trend_keywords)
@@ -183,8 +183,9 @@ def _identify_multi_series_axis(
         f"has_trend={has_trend}"
     )
 
-    # 카테고리 + 시계열 + 추이 키워드 → 멀티 시리즈
-    if category_fields and date_fields and has_trend:
+    # TC-013: 카테고리 + 시계열 → 멀티 시리즈 (has_trend 조건 제거)
+    # 시계열과 카테고리 필드가 모두 있으면 멀티 시리즈로 판단
+    if category_fields and date_fields:
         x_axis_key = date_fields[0]  # 시계열을 X축으로
         series_key = category_fields[0]  # 카테고리를 시리즈로
         logger.info(
@@ -1465,16 +1466,19 @@ def compose_sql_render_spec(
         summary_stats_template: LLM이 생성한 summaryStats 템플릿 (선택적)
     """
     # TC-001: 차트 렌더링 타입 감지
-    # LLM이 유효한 차트 타입을 추천했으면 차트로 렌더링
+    # 사용자 키워드 기반 렌더링 타입 우선 감지
     render_type = _detect_render_type_from_message(question)
 
-    # LLM 차트 타입이 유효하면(none이 아니면) 차트 요청으로 처리
-    if llm_chart_type and llm_chart_type in ["line", "bar", "pie"]:
+    # TC-001-1: 테이블 키워드 감지 시 LLM chartType 무시
+    if render_type == "table":
+        logger.info(f"[compose_sql_render_spec] User requested table, ignoring LLM chartType={llm_chart_type}")
+        # 테이블 렌더링으로 진행 (아래 로직에서 처리)
+    elif llm_chart_type and llm_chart_type in ["line", "bar", "pie"]:
+        # LLM 차트 타입이 유효하면 차트 요청으로 처리
         logger.info(f"[compose_sql_render_spec] LLM chart type detected: {llm_chart_type}")
         return _compose_chart_render_spec(result, question, llm_chart_type, insight_template, summary_stats_template)
-
-    # 메시지에서 차트 키워드 감지
-    if render_type == "chart":
+    elif render_type == "chart":
+        # 메시지에서 차트 키워드 감지
         return _compose_chart_render_spec(result, question, llm_chart_type, insight_template, summary_stats_template)
 
     data = result.get("data", [])

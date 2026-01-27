@@ -43,6 +43,16 @@ from app.services.query_planner import get_query_planner, IntentType
 from app.services.render_composer import get_render_composer
 from app.services.rag_service import get_rag_service
 
+# 템플릿
+from app.templates.daily_check import (
+    get_daily_check_queries,
+    compose_daily_check_render_spec,
+    get_daily_check_context,
+    _calculate_metrics,
+    _safe_get_first_row,
+    _safe_get_rows
+)
+
 # Text-to-SQL 모드 플래그
 ENABLE_TEXT_TO_SQL = os.getenv("SQL_ENABLE_TEXT_TO_SQL", "false").lower() == "true"
 
@@ -142,14 +152,9 @@ async def chat(request: ChatRequest):
     }
 
     # ========================================
-    # Text-to-SQL 모드 분기
+    # 템플릿 기반 Intent 분류 (Text-to-SQL 분기 전)
     # ========================================
-    if ENABLE_TEXT_TO_SQL:
-        return await handle_text_to_sql(request, request_id, start_time)
-
     try:
-        # Stage 0: Intent Classification (2단계 분류)
-        stage_start = datetime.utcnow()
         query_planner = get_query_planner()
 
         # 대화 컨텍스트 빌드
@@ -158,10 +163,8 @@ async def chat(request: ChatRequest):
         if request.conversation_history:
             conversation_context = build_conversation_context(request.conversation_history)
             previous_results = extract_previous_results(request.conversation_history)
-            logger.info(f"[{request_id}] Using conversation context with {len(request.conversation_history)} messages")
-            logger.info(f"[{request_id}] Found {len(previous_results)} previous results for intent classification")
 
-        # 1단계: Intent 분류 (가벼운 모델로 빠르게)
+        # Intent 분류 (템플릿 기반 요청 감지)
         intent_result = await query_planner.classify_intent(
             request.message,
             conversation_context or "",
@@ -169,11 +172,18 @@ async def chat(request: ChatRequest):
         )
         logger.info(f"[{request_id}] Intent classification: {intent_result.intent.value}, confidence={intent_result.confidence:.2f}")
 
-        # direct_answer면 바로 응답 반환 (QueryPlan 생성 스킵)
-        if intent_result.intent == IntentType.DIRECT_ANSWER and intent_result.direct_answer_text:
-            logger.info(f"[{request_id}] Direct answer detected, skipping QueryPlan generation")
-            logger.info(f"[{request_id}] Direct answer text: {intent_result.direct_answer_text}")
+        # daily_check면 템플릿 기반 처리 (Text-to-SQL/QueryPlan 우회)
+        if intent_result.intent == IntentType.DAILY_CHECK:
+            logger.info(f"[{request_id}] Daily check template triggered")
+            return await _handle_daily_check_template(
+                request,
+                request_id,
+                intent_result
+            )
 
+        # direct_answer면 바로 응답 반환
+        if intent_result.intent == IntentType.DIRECT_ANSWER and intent_result.direct_answer_text:
+            logger.info(f"[{request_id}] Direct answer detected")
             return ChatResponse(
                 request_id=request_id,
                 query_plan={
@@ -195,12 +205,27 @@ async def chat(request: ChatRequest):
                 },
                 timestamp=datetime.utcnow().isoformat() + "Z"
             )
+    except Exception as e:
+        logger.warning(f"[{request_id}] Intent classification failed, proceeding to default mode: {e}")
+        # 예외 발생 시 변수 초기화
+        query_planner = None
+        conversation_context = None
 
-        processing_info["stages"].append({
-            "name": "Intent Classification",
-            "duration": (datetime.utcnow() - stage_start).total_seconds() * 1000,
-            "result": intent_result.intent.value
-        })
+    # ========================================
+    # Text-to-SQL 모드 분기
+    # ========================================
+    if ENABLE_TEXT_TO_SQL:
+        return await handle_text_to_sql(request, request_id, start_time)
+
+    # ========================================
+    # QueryPlan 모드 (Text-to-SQL 비활성화 시)
+    # ========================================
+    try:
+        # QueryPlanner 초기화 (Intent 분류 실패 시 재초기화)
+        if query_planner is None:
+            query_planner = get_query_planner()
+        if conversation_context is None and request.conversation_history:
+            conversation_context = build_conversation_context(request.conversation_history)
 
         # Stage 1: Natural Language -> QueryPlan
         stage_start = datetime.utcnow()
@@ -295,6 +320,70 @@ async def chat(request: ChatRequest):
 # ============================================
 # Intent 별 핸들러
 # ============================================
+
+async def _handle_daily_check_template(
+    request: ChatRequest,
+    request_id: str,
+    intent_result
+) -> ChatResponse:
+    """템플릿 기반 일일점검 처리"""
+    # 대상 날짜 결정
+    target_date = intent_result.check_date or datetime.now().strftime("%Y-%m-%d")
+
+    logger.info(f"[{request_id}] Processing daily check for date: {target_date}")
+
+    # 템플릿에서 쿼리 목록 가져오기
+    queries = get_daily_check_queries(target_date)
+
+    # Core API 순차 호출
+    results = []
+    for i, query_plan in enumerate(queries):
+        logger.info(f"[{request_id}] Executing daily check query {i+1}/4: {query_plan.get('entity')}")
+        try:
+            result = await call_core_api(query_plan)
+            results.append(result)
+        except Exception as e:
+            logger.error(f"[{request_id}] Failed to execute query {i+1}: {e}")
+            results.append({"data": {"rows": []}})
+
+    # 템플릿으로 RenderSpec 생성
+    render_spec = compose_daily_check_render_spec(
+        results,
+        target_date,
+        request.message
+    )
+
+    # 꼬리질문 지원을 위한 컨텍스트 생성
+    today_summary = _safe_get_first_row(results[0])
+    status_dist = _safe_get_rows(results[1])
+    refund_summary = _safe_get_first_row(results[2])
+    yesterday_summary = _safe_get_first_row(results[3])
+    metrics = _calculate_metrics(today_summary, yesterday_summary, refund_summary)
+    context = get_daily_check_context(metrics, status_dist, target_date)
+
+    return ChatResponse(
+        request_id=request_id,
+        render_spec=render_spec,
+        query_plan={
+            "mode": "daily_check_template",
+            "targetDate": target_date,
+            "requestId": request_id
+        },
+        query_result={
+            "requestId": request_id,
+            "status": "success",
+            "data": {"rows": [], "aggregations": {}},
+            "metadata": {
+                "dataSource": "daily_check_template",
+                "targetDate": target_date,
+                "queryCount": len(queries)
+            },
+            "context_for_followup": context
+        },
+        ai_message=f"'{request.message}'에 대한 일일점검 결과입니다.",
+        timestamp=datetime.utcnow().isoformat() + "Z"
+    )
+
 
 async def _handle_filter_local(
     request: ChatRequest,
@@ -538,6 +627,61 @@ def _handle_error(request_id: str, message: str, error: Exception, start_time: d
 # ============================================
 # 유틸리티 함수
 # ============================================
+
+def _find_daily_check_context(conversation_history: List[ChatMessageItem]) -> Optional[Dict[str, Any]]:
+    """
+    대화 이력에서 일일점검 컨텍스트 찾기
+
+    Returns:
+        daily_check_result 컨텍스트 또는 None
+    """
+    for msg in reversed(conversation_history):
+        if msg.role == "assistant" and msg.queryResult:
+            context = msg.queryResult.get("context_for_followup") or msg.queryResult.get("metadata", {})
+            if context.get("type") == "daily_check_result" or context.get("dataSource") == "daily_check_template":
+                return {
+                    "targetDate": context.get("targetDate") or msg.queryResult.get("metadata", {}).get("targetDate"),
+                    "metrics": context.get("metrics", {})
+                }
+            # queryPlan에서 daily_check_template 확인
+            if msg.queryPlan and msg.queryPlan.get("mode") == "daily_check_template":
+                return {
+                    "targetDate": msg.queryPlan.get("targetDate"),
+                    "metrics": {}
+                }
+    return None
+
+
+def _is_error_related_query(message: str) -> bool:
+    """
+    오류/실패 관련 질문인지 확인
+    """
+    error_keywords = [
+        "오류", "실패", "에러", "error", "fail", "aborted",
+        "중단", "취소", "문제", "장애", "이슈",
+        "failure_code", "failure_message"
+    ]
+    message_lower = message.lower()
+    return any(keyword.lower() in message_lower for keyword in error_keywords)
+
+
+def _has_date_in_message(message: str) -> bool:
+    """
+    메시지에 날짜가 이미 포함되어 있는지 확인
+    """
+    import re
+    # 날짜 패턴: YYYY-MM-DD, YYYY년 M월 D일, M월 D일 등
+    date_patterns = [
+        r'\d{4}-\d{2}-\d{2}',  # 2026-01-24
+        r'\d{4}년\s*\d{1,2}월\s*\d{1,2}일',  # 2026년 1월 24일
+        r'\d{1,2}월\s*\d{1,2}일',  # 1월 24일
+        r'오늘', r'어제', r'금일', r'당일', r'전일'
+    ]
+    for pattern in date_patterns:
+        if re.search(pattern, message):
+            return True
+    return False
+
 
 def _find_result_messages(conversation_history: Optional[List[ChatMessageItem]], request_id: str) -> List[tuple]:
     """대화 이력에서 결과가 있는 메시지들 찾기"""
@@ -860,13 +1004,34 @@ async def handle_text_to_sql(
 
     AI가 직접 SQL을 생성하고 읽기 전용 DB에서 실행합니다.
 
+    Phase 0 추가: 일일점검 꼬리 질문 처리
+    - 일일점검 컨텍스트가 있고 오류/실패 관련 질문인 경우
+    - targetDate를 메시지에 자동 주입
+
     Phase 1 추가: 산술 연산 요청 감지
     - 이전 집계 결과가 있고 + 산술 연산 요청인 경우
     - DB 조회 없이 직접 계산하여 응답
     """
     logger.info(f"[{request_id}] Text-to-SQL mode: processing")
 
+    # 메시지 변환용 (일일점검 꼬리 질문 처리 결과)
+    enhanced_message = request.message
+
     try:
+        # ========================================
+        # Phase 0: 일일점검 꼬리 질문 처리
+        # ========================================
+        if request.conversation_history:
+            daily_check_context = _find_daily_check_context(request.conversation_history)
+            if daily_check_context:
+                target_date = daily_check_context.get("targetDate")
+                if target_date and _is_error_related_query(request.message):
+                    # 메시지에 날짜가 없으면 자동 주입
+                    if not _has_date_in_message(request.message):
+                        enhanced_message = f"{target_date} 날짜 기준으로 {request.message}"
+                        logger.info(f"[{request_id}] Daily check followup: injected targetDate={target_date}")
+                        logger.info(f"[{request_id}] Enhanced message: {enhanced_message}")
+
         # ========================================
         # Phase 1: 산술 연산 요청 감지 (수수료, VAT 등)
         # ========================================
@@ -907,9 +1072,9 @@ async def handle_text_to_sql(
         # 대화 이력 변환 (Text-to-SQL 형식)
         sql_history = build_sql_history(request.conversation_history)
 
-        # SQL 생성 및 실행 (is_refinement 전달)
+        # SQL 생성 및 실행 (is_refinement 전달, enhanced_message 사용)
         result = await text_to_sql.query(
-            question=request.message,
+            question=enhanced_message,
             conversation_history=sql_history,
             retry_on_error=True,
             is_refinement=is_refinement

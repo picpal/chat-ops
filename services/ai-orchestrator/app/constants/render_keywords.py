@@ -189,4 +189,9 @@ CATEGORY_FIELDS: List[str] = [
     "merchant_id",
     "source_type",
     "card_company",
+    # TC-013: 가맹점 이름 필드 추가 (멀티 시리즈 감지용)
+    "businessName",
+    "business_name",
+    "merchantName",
+    "merchant_name",
 ]
