@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppLayout } from '@/components/layout'
 import {
@@ -10,6 +10,7 @@ import {
 import { ErrorBoundary } from '@/components/common'
 import { ChatInterface } from '@/components/chat'
 import { AdminPage } from '@/components/admin'
+import { ScenariosPage } from '@/components/scenarios'
 import { useInitializeChat } from '@/hooks'
 
 const queryClient = new QueryClient({
@@ -22,12 +23,42 @@ const queryClient = new QueryClient({
   },
 })
 
-type PageView = 'chat' | 'admin'
+type PageView = 'chat' | 'admin' | 'scenarios'
+
+const pathToView = (pathname: string): PageView => {
+  if (pathname === '/admin') return 'admin'
+  if (pathname === '/scenarios') return 'scenarios'
+  return 'chat'
+}
 
 // Internal component that uses the initialization hook
 function AppContent() {
-  const [currentView, setCurrentView] = useState<PageView>('chat')
+  const [currentView, setCurrentView] = useState<PageView>(
+    () => pathToView(window.location.pathname)
+  )
   const { isInitializing } = useInitializeChat()
+
+  // Set initial history state
+  useEffect(() => {
+    window.history.replaceState({ view: currentView }, '')
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Handle browser back/forward
+  useEffect(() => {
+    const handlePopState = (e: PopStateEvent) => {
+      const view = e.state?.view || pathToView(window.location.pathname)
+      setCurrentView(view)
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
+
+  const navigateTo = useCallback((view: PageView) => {
+    if (view !== currentView) {
+      window.history.pushState({ view }, '', `/${view === 'chat' ? '' : view}`)
+      setCurrentView(view)
+    }
+  }, [currentView])
 
   return (
     <>
@@ -37,7 +68,7 @@ function AppContent() {
           <span className="font-bold text-lg">ChatOps</span>
           <div className="flex gap-2">
             <button
-              onClick={() => setCurrentView('chat')}
+              onClick={() => navigateTo('chat')}
               className={`px-3 py-1 rounded text-sm ${
                 currentView === 'chat'
                   ? 'bg-blue-600'
@@ -47,7 +78,7 @@ function AppContent() {
               채팅
             </button>
             <button
-              onClick={() => setCurrentView('admin')}
+              onClick={() => navigateTo('admin')}
               className={`px-3 py-1 rounded text-sm ${
                 currentView === 'admin'
                   ? 'bg-blue-600'
@@ -55,6 +86,16 @@ function AppContent() {
               }`}
             >
               문서 관리
+            </button>
+            <button
+              onClick={() => navigateTo('scenarios')}
+              className={`px-3 py-1 rounded text-sm ${
+                currentView === 'scenarios'
+                  ? 'bg-blue-600'
+                  : 'bg-gray-700 hover:bg-gray-600'
+              }`}
+            >
+              시나리오 관리
             </button>
           </div>
         </div>
@@ -68,8 +109,10 @@ function AppContent() {
         <AppLayout>
           <ChatInterface />
         </AppLayout>
-      ) : (
+      ) : currentView === 'admin' ? (
         <AdminPage />
+      ) : (
+        <ScenariosPage />
       )}
 
       {/* Modals */}
