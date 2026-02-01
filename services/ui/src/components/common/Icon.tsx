@@ -4,11 +4,12 @@ import { cn } from '@/utils'
 interface IconProps {
   name: string
   className?: string
-  size?: 'sm' | 'md' | 'lg'
+  size?: 'xs' | 'sm' | 'md' | 'lg'
   onClick?: () => void
 }
 
 const sizeClasses = {
+  xs: 'text-[14px]',
   sm: 'text-[16px]',
   md: 'text-[20px]',
   lg: 'text-[24px]',

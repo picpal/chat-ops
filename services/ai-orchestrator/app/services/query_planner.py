@@ -215,6 +215,7 @@ class IntentType(str, Enum):
     FILTER_LOCAL = "filter_local"      # 이전 결과 필터링
     AGGREGATE_LOCAL = "aggregate_local"  # 이전 결과 집계
     DAILY_CHECK = "daily_check"        # 템플릿 기반 일일점검
+    KNOWLEDGE_ANSWER = "knowledge_answer"  # RAG 문서 기반 지식 응답
 
 
 class IntentClassification(BaseModel):
@@ -567,6 +568,14 @@ class QueryPlannerService:
   - 특정 날짜 언급 시 → 해당 날짜 (YYYY-MM-DD)
   - 절대 임의의 날짜를 생성하지 말 것!
 
+### 6. knowledge_answer (RAG 문서 기반 지식 응답)
+- 프로세스/절차 질문: "부분취소 프로세스", "정산 절차", "결제 흐름"
+- 도메인 개념/정의 질문: "가상계좌란?", "정산이 뭐야?"
+- 규칙/정책 질문: "수수료율 기준", "정산 주기", "환불 규정"
+- 에러코드 관련 질문: "INVALID_CARD_NUMBER 에러가 뭐야?"
+- FAQ 유형 질문: "결제 취소 방법", "가맹점 등록 절차"
+- **핵심 구분**: 데이터(숫자/건수/목록) 조회가 아닌, 문서/지식 기반 설명 요청
+
 ## 중요한 판단 규칙 - 반드시 순서대로 확인!
 
 **Step 1**: 이전 결과가 **테이블(목록)**인가, **집계 결과(텍스트)**인가?
@@ -692,6 +701,19 @@ intent가 "direct_answer"이면 **반드시** direct_answer_text에 계산된 �
 - GROUP BY 컬럼 값(예: failure_code='INVALID_CARD')을 WHERE 조건으로 변환
 - 다른 엔티티(예: payment_history) 조회 시 적절한 JOIN 필요
 
+### CASE 7: knowledge_answer vs query_needed 구분
+| 사용자 입력 | 분류 | 이유 |
+|------------|------|------|
+| "부분취소 프로세스 알려줘" | knowledge_answer | 프로세스 설명 |
+| "부분취소된 결제 건수" | query_needed | 건수 = DB 필요 |
+| "환불 규정이 뭐야?" | knowledge_answer | 규정 설명 |
+| "환불 내역 조회해줘" | query_needed | 데이터 조회 |
+| "결제 상태 종류가 뭐야?" | knowledge_answer | 상태값 정의 |
+| "DONE 상태 결제 목록" | query_needed | 목록 = DB 필요 |
+| "수수료율 기준이 뭐야?" | knowledge_answer | 정책 설명 |
+| "가상계좌란?" | knowledge_answer | 개념 설명 |
+| "에러코드 INVALID_CARD 뭐야?" | knowledge_answer | 에러코드 설명 |
+
 ### Negative 예시 (잘못된 분류 방지)
 | 상황 | 잘못된 분류 | 올바른 분류 | 이유 |
 |------|-----------|------------|------|
@@ -702,7 +724,7 @@ intent가 "direct_answer"이면 **반드시** direct_answer_text에 계산된 �
 
 응답은 반드시 JSON 형식으로:
 {{
-    "intent": "direct_answer" | "query_needed" | "filter_local" | "aggregate_local" | "daily_check",
+    "intent": "direct_answer" | "query_needed" | "filter_local" | "aggregate_local" | "daily_check" | "knowledge_answer",
     "confidence": 0.0 ~ 1.0,
     "reasoning": "판단 근거 (1-2문장)",
     "direct_answer_text": "direct_answer인 경우 **반드시 계산된 답변** 작성, 다른 intent면 null",
@@ -1310,13 +1332,6 @@ clarification이 필요하면 "YES", 필요 없으면 "NO"만 응답하세요.
 | "그래프", "차트", "시각화" (단독 사용) | "chart" |
 | "표", "테이블", "목록", "리스트" (단독 사용) | "table" |
 
-#### 3. 암시적 차트 요청 (데이터 특성 기반) - 중요!
-| 사용자 표현 | preferredRenderType | 추천 차트 타입 |
-|------------|---------------------|---------------|
-| "비율", "점유율", "분포", "비중" | "chart" | pie |
-| "추이", "추세", "변화", "트렌드" | "chart" | line |
-| "일별", "월별", "주별" + 집계 | "chart" | line |
-
 ### 예시
 
 **예시 1: 표로 요청**
@@ -1335,28 +1350,19 @@ clarification이 필요하면 "YES", 필요 없으면 "NO"만 응답하세요.
 - 입력: "**차트** 만들어줘"
 - 결과: operation=aggregate, **preferredRenderType="chart"**
 
-**예시 5: 암시적 차트 요청 - 비율 (NEW!)**
-- 입력: "상태별 결제 **비율** 알려줘"
-- 결과: operation=aggregate, groupBy=["status"], **preferredRenderType="chart"** (pie 차트 추천)
-
-**예시 6: 암시적 차트 요청 - 추이 (NEW!)**
-- 입력: "최근 한 달 결제 **추이** 보여줘"
-- 결과: operation=aggregate, groupBy=["approvedAt"], **preferredRenderType="chart"** (line 차트 추천)
-
-**예시 7: 명시 없음**
+**예시 5: 명시 없음**
 - 입력: "최근 결제 내역 조회해줘"
 - 결과: operation=list, **preferredRenderType 생략** (시스템이 자동 결정)
 
-**예시 8: 부정 표현 (표 우선)**
+**예시 6: 부정 표현 (표 우선)**
 - 입력: "**그래프 말고 표로** 보여줘"
 - 결과: **preferredRenderType="table"** (부정 표현 시 표 우선)
 
 ### 중요 규칙
 - 사용자가 "표로"라고 명시하면 groupBy가 있더라도 **반드시 preferredRenderType="table"** 설정
 - **"그래프", "차트" 단독 키워드도 차트 요청으로 인식** (조사 없어도 됨)
-- **"비율", "추이" 같은 암시적 표현도 차트가 적절하면 preferredRenderType="chart" 설정**
 - "그래프 말고", "차트 대신" 같은 부정 표현은 **표(table)로 처리**
-- 사용자가 렌더링 타입을 명시하지 않으면 preferredRenderType 필드를 생략 (시스템이 자동 결정)
+- **사용자가 명시적으로 차트/그래프를 요청하지 않으면 preferredRenderType 필드를 생략하라** (시스템이 테이블로 자동 결정)
 - preferredRenderType은 operation과 독립적 (aggregate 작업도 표로 표시 가능)
 
 ## 쿼리 의도 분류 (query_intent) - 매우 중요!

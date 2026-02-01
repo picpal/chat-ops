@@ -17,8 +17,8 @@ from datetime import datetime, timedelta
 class TestRenderComposerChartTypes:
     """RenderComposer 차트 타입 결정 테스트"""
 
-    def test_payment_trend_renders_as_line_chart(self):
-        """결제 추이 결과가 line chart로 렌더링"""
+    def test_payment_trend_renders_as_table_without_explicit_chart_keyword(self):
+        """명시적 차트 키워드 없이 '추이'만 사용하면 테이블로 렌더링"""
         from app.services.render_composer import RenderComposerService
 
         render_composer = RenderComposerService()
@@ -47,12 +47,40 @@ class TestRenderComposerChartTypes:
 
         spec = render_composer.compose(query_result, query_plan, "최근 1개월 결제 추이")
 
+        assert spec["type"] == "table"
+
+    def test_payment_trend_renders_as_chart_with_explicit_keyword(self):
+        """명시적 차트 키워드('그래프')가 있으면 차트로 렌더링"""
+        from app.services.render_composer import RenderComposerService
+
+        render_composer = RenderComposerService()
+
+        query_result = {
+            "requestId": "test-123",
+            "status": "success",
+            "data": {
+                "rows": [
+                    {"approvedAt": "2025-12-01", "count": 100, "totalAmount": 10000000},
+                    {"approvedAt": "2025-12-02", "count": 150, "totalAmount": 15000000},
+                    {"approvedAt": "2025-12-03", "count": 120, "totalAmount": 12000000},
+                ]
+            }
+        }
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["approvedAt"],
+            "aggregations": [{"function": "count", "field": "*", "alias": "count"}],
+            "timeRange": {"start": "2025-12-01T00:00:00Z", "end": "2025-12-31T23:59:59Z"}
+        }
+
+        spec = render_composer.compose(query_result, query_plan, "최근 1개월 결제 추이 그래프로 보여줘")
+
         assert spec["type"] == "chart"
         assert spec["chart"]["chartType"] == "line"
-        assert spec["chart"]["xAxis"]["type"] == "time"
 
-    def test_status_ratio_renders_as_pie_chart(self):
-        """상태별 비율 결과가 pie chart로 렌더링"""
+    def test_status_ratio_renders_as_table_without_explicit_chart_keyword(self):
+        """명시적 차트 키워드 없이 '비율'만 사용하면 테이블로 렌더링"""
         from app.services.render_composer import RenderComposerService
 
         render_composer = RenderComposerService()
@@ -76,10 +104,7 @@ class TestRenderComposerChartTypes:
 
         spec = render_composer.compose(query_result, query_plan, "결제 상태별 비율")
 
-        assert spec["type"] == "chart"
-        assert spec["chart"]["chartType"] == "pie"
-        assert "nameKey" in spec["chart"]
-        assert "valueKey" in spec["chart"]
+        assert spec["type"] == "table"
 
     def test_merchant_transactions_render_as_table(self):
         """가맹점 거래 결과가 테이블로 렌더링"""

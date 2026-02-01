@@ -14,6 +14,7 @@ import {
   SessionResponse,
   MessageResponse,
 } from '@/api/chatPersistenceApi'
+import { ratingsApi } from '@/api/ratings'
 
 // localStorage key for persisting current session
 const CURRENT_SESSION_KEY = 'chatCurrentSessionId'
@@ -47,6 +48,9 @@ interface ChatState {
     option: string,
     metadata?: ClarificationRenderSpec['metadata']
   ) => void
+
+  // Rating
+  setMessageRating: (sessionId: string, messageId: string, rating: number) => void
 
   // Server sync actions
   setCurrentUser: (userId: string) => void
@@ -339,6 +343,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
+  // Rating
+  setMessageRating: (sessionId: string, messageId: string, rating: number) => {
+    // Optimistic update
+    set((state) => ({
+      sessions: state.sessions.map((session) =>
+        session.id === sessionId
+          ? {
+              ...session,
+              messages: session.messages.map((msg) =>
+                msg.id === messageId ? { ...msg, rating } : msg
+              ),
+            }
+          : session
+      ),
+    }))
+
+    // Find the message to get its requestId (use message id as requestId)
+    const session = get().sessions.find((s) => s.id === sessionId)
+    const message = session?.messages.find((m) => m.id === messageId)
+    const requestId = message?.id || messageId
+
+    // Persist to backend
+    ratingsApi
+      .saveRating({ requestId, rating, sessionId })
+      .then(() => {
+        console.log('[chatStore] Rating saved:', requestId, rating)
+      })
+      .catch((error) => {
+        console.error('[chatStore] Failed to save rating:', error)
+      })
+  },
+
   // Server sync actions
   setCurrentUser: (userId: string) => {
     set({ currentUserId: userId })
@@ -383,6 +419,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const messages = serverSession.messages
         ? serverSession.messages.map(convertServerMessageToLocal)
         : []
+
+      // Load ratings for the session and map to messages
+      try {
+        const ratings = await ratingsApi.getRatingsBySession(sessionId)
+        if (ratings && ratings.length > 0) {
+          const ratingsMap = new Map(ratings.map((r) => [r.requestId, r.rating]))
+          messages.forEach((msg) => {
+            const rating = ratingsMap.get(msg.id)
+            if (rating !== undefined) {
+              msg.rating = rating
+            }
+          })
+          console.log('[chatStore] Loaded ratings for session:', sessionId, ratings.length)
+        }
+      } catch (ratingError) {
+        console.warn('[chatStore] Failed to load ratings, messages will display without ratings:', ratingError)
+      }
 
       set((state) => ({
         sessions: state.sessions.map((session) =>

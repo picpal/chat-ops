@@ -1473,12 +1473,10 @@ def compose_sql_render_spec(
     if render_type == "table":
         logger.info(f"[compose_sql_render_spec] User requested table, ignoring LLM chartType={llm_chart_type}")
         # 테이블 렌더링으로 진행 (아래 로직에서 처리)
-    elif llm_chart_type and llm_chart_type in ["line", "bar", "pie"]:
-        # LLM 차트 타입이 유효하면 차트 요청으로 처리
-        logger.info(f"[compose_sql_render_spec] LLM chart type detected: {llm_chart_type}")
-        return _compose_chart_render_spec(result, question, llm_chart_type, insight_template, summary_stats_template)
     elif render_type == "chart":
-        # 메시지에서 차트 키워드 감지
+        # 사용자가 명시적으로 차트를 요청한 경우에만 차트 렌더링
+        # LLM 추천 chartType이 있으면 활용, 없으면 규칙 기반 결정
+        logger.info(f"[compose_sql_render_spec] User requested chart, LLM chartType={llm_chart_type}")
         return _compose_chart_render_spec(result, question, llm_chart_type, insight_template, summary_stats_template)
 
     data = result.get("data", [])

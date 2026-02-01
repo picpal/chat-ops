@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from app.api.v1 import chat, documents
+from app.api.v1 import chat, documents, ratings
 
 # Load environment variables
 load_dotenv()
@@ -33,6 +33,7 @@ app.add_middleware(
 # Include routers
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
 app.include_router(documents.router, prefix="/api/v1", tags=["documents"])
+app.include_router(ratings.router, prefix="/api/v1", tags=["ratings"])
 
 
 @app.get("/")

@@ -47,14 +47,14 @@ class SqlBuilderServiceTest {
         @DisplayName("Customer 엔티티 조회")
         void customerQuery() {
             Map<String, Object> queryPlan = Map.of(
-                "entity", "Customer",
+                "entity", "PgCustomer",
                 "operation", "list",
                 "limit", 5
             );
 
             SqlBuilderService.SqlQuery result = sqlBuilderService.buildQuery(queryPlan);
 
-            assertThat(result.getSql()).contains("FROM customers");
+            assertThat(result.getSql()).contains("FROM pg_customers");
         }
     }
 
@@ -215,7 +215,7 @@ class SqlBuilderServiceTest {
             SqlBuilderService.SqlQuery result = sqlBuilderService.buildQuery(queryPlan);
 
             assertThat(result.getSql()).contains("COUNT(*)");
-            assertThat(result.getSql()).contains("AS total_count");
+            assertThat(result.getSql()).contains("AS \"total_count\"");
         }
 
         @Test
@@ -233,7 +233,7 @@ class SqlBuilderServiceTest {
             SqlBuilderService.SqlQuery result = sqlBuilderService.buildQuery(queryPlan);
 
             assertThat(result.getSql()).contains("SUM(total_amount)");
-            assertThat(result.getSql()).contains("AS total_revenue");
+            assertThat(result.getSql()).contains("AS \"total_revenue\"");
         }
 
         @Test

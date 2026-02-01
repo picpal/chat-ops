@@ -181,6 +181,11 @@ async def chat(request: ChatRequest):
                 intent_result
             )
 
+        # knowledge_answer면 RAG 문서 기반 응답 반환
+        if intent_result.intent == IntentType.KNOWLEDGE_ANSWER:
+            logger.info(f"[{request_id}] Knowledge answer detected")
+            return await _handle_knowledge_answer(request, request_id, intent_result)
+
         # direct_answer면 바로 응답 반환
         if intent_result.intent == IntentType.DIRECT_ANSWER and intent_result.direct_answer_text:
             logger.info(f"[{request_id}] Direct answer detected")
@@ -524,6 +529,158 @@ def _handle_direct_answer(request_id: str, query_plan: Dict[str, Any]) -> ChatRe
         ai_message=direct_answer,
         timestamp=datetime.utcnow().isoformat() + "Z"
     )
+
+
+async def _handle_knowledge_answer(
+    request: ChatRequest,
+    request_id: str,
+    intent_result
+) -> ChatResponse:
+    """RAG 문서 기반 지식 응답 처리"""
+    try:
+        rag_service = get_rag_service()
+
+        # RAG 문서 검색 (k=5, 낮은 유사도 임계값으로 폭넓게 검색)
+        documents = await rag_service.search_docs(
+            query=request.message,
+            k=5,
+            min_similarity=0.4,
+            use_dynamic_params=False
+        )
+
+        if not documents:
+            logger.info(f"[{request_id}] No RAG documents found for knowledge answer")
+            return ChatResponse(
+                request_id=request_id,
+                query_plan={
+                    "query_intent": "knowledge_answer",
+                    "requestId": request_id
+                },
+                query_result=None,
+                render_spec={
+                    "type": "text",
+                    "title": "문서 검색 결과 없음",
+                    "text": {
+                        "content": "관련 문서를 찾지 못했습니다. 질문을 다시 표현해 주시거나, 데이터 조회가 필요하시면 구체적인 조회 조건을 말씀해 주세요.",
+                        "format": "markdown"
+                    },
+                    "metadata": {
+                        "intent": "knowledge_answer",
+                        "confidence": intent_result.confidence,
+                        "reasoning": intent_result.reasoning
+                    }
+                },
+                timestamp=datetime.utcnow().isoformat() + "Z"
+            )
+
+        # LLM을 통한 RAG 기반 답변 생성
+        logger.info(f"[{request_id}] Found {len(documents)} RAG documents, generating knowledge answer")
+        answer_text = await _generate_knowledge_answer(request.message, documents, rag_service)
+
+        # 참조 문서 정보 구성
+        references = [
+            {
+                "title": doc.title,
+                "doc_type": doc.doc_type,
+                "similarity": round(doc.similarity, 3)
+            }
+            for doc in documents
+        ]
+
+        return ChatResponse(
+            request_id=request_id,
+            query_plan={
+                "query_intent": "knowledge_answer",
+                "requestId": request_id
+            },
+            query_result=None,
+            render_spec={
+                "type": "text",
+                "title": "업무 지식 답변",
+                "text": {
+                    "content": answer_text,
+                    "format": "markdown"
+                },
+                "metadata": {
+                    "intent": "knowledge_answer",
+                    "confidence": intent_result.confidence,
+                    "reasoning": intent_result.reasoning,
+                    "references": references
+                }
+            },
+            ai_message=answer_text,
+            timestamp=datetime.utcnow().isoformat() + "Z"
+        )
+
+    except Exception as e:
+        logger.error(f"[{request_id}] Knowledge answer error: {e}", exc_info=True)
+        return ChatResponse(
+            request_id=request_id,
+            query_plan={
+                "query_intent": "knowledge_answer",
+                "requestId": request_id
+            },
+            query_result=None,
+            render_spec={
+                "type": "text",
+                "title": "처리 오류",
+                "text": {
+                    "content": f"지식 기반 답변 생성 중 오류가 발생했습니다: {str(e)}",
+                    "format": "markdown"
+                },
+                "metadata": {
+                    "intent": "knowledge_answer",
+                    "error": str(e)
+                }
+            },
+            timestamp=datetime.utcnow().isoformat() + "Z"
+        )
+
+
+async def _generate_knowledge_answer(
+    user_message: str,
+    documents: list,
+    rag_service
+) -> str:
+    """RAG 컨텍스트 + 사용자 질문으로 LLM 답변 생성"""
+    from langchain_openai import ChatOpenAI
+    from langchain_anthropic import ChatAnthropic
+    from langchain_core.messages import HumanMessage
+
+    # RAG 컨텍스트 구성
+    context = rag_service.format_context(documents)
+
+    # LLM 설정
+    llm_provider = os.getenv("LLM_PROVIDER", "openai")
+    if llm_provider == "anthropic":
+        llm = ChatAnthropic(
+            model=os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest"),
+            temperature=0
+        )
+    else:
+        llm = ChatOpenAI(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            temperature=0
+        )
+
+    prompt = f"""당신은 PG(결제 게이트웨이) 백오피스 업무 지식 전문가입니다.
+아래 제공된 참고 문서만을 기반으로 사용자 질문에 답변하세요.
+
+{context}
+
+## 사용자 질문
+{user_message}
+
+## 답변 규칙
+1. **제공된 문서 내용만** 기반으로 답변하세요. 문서에 없는 내용은 추측하지 마세요.
+2. 문서에 해당 내용이 부족하면 "제공된 문서에서 해당 내용을 충분히 확인하지 못했습니다"라고 안내하세요.
+3. **마크다운 형식**으로 가독성 있게 작성하세요 (제목, 목록, 굵은 글씨 활용).
+4. 프로세스/절차 설명 시 **단계별 번호**를 사용하세요.
+5. 관련 에러코드, 주의사항 등 부가 정보가 문서에 있으면 함께 안내하세요.
+"""
+
+    response = await llm.ainvoke([HumanMessage(content=prompt)])
+    return response.content.strip()
 
 
 def _handle_clarification(request_id: str, query_plan: Dict[str, Any], start_time: datetime) -> ChatResponse:

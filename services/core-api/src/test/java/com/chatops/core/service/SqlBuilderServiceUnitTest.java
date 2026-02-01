@@ -352,7 +352,7 @@ class SqlBuilderServiceUnitTest {
             SqlBuilderService.SqlQuery result = sqlBuilderService.buildQuery(queryPlan);
 
             assertThat(result.getSql())
-                .contains("SELECT COUNT(*) AS total_count")
+                .contains("SELECT COUNT(*) AS \"total_count\"")
                 .contains("FROM orders");
         }
 
@@ -371,7 +371,7 @@ class SqlBuilderServiceUnitTest {
             SqlBuilderService.SqlQuery result = sqlBuilderService.buildQuery(queryPlan);
 
             assertThat(result.getSql())
-                .contains("SUM(total_amount) AS revenue");
+                .contains("SUM(total_amount) AS \"revenue\"");
         }
 
         @Test
@@ -391,9 +391,9 @@ class SqlBuilderServiceUnitTest {
             SqlBuilderService.SqlQuery result = sqlBuilderService.buildQuery(queryPlan);
 
             assertThat(result.getSql())
-                .contains("status AS status")
-                .contains("COUNT(*) AS order_count")
-                .contains("SUM(total_amount) AS total_revenue")
+                .contains("status AS \"status\"")
+                .contains("COUNT(*) AS \"order_count\"")
+                .contains("SUM(total_amount) AS \"total_revenue\"")
                 .contains("GROUP BY status");
         }
 

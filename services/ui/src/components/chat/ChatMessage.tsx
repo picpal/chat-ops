@@ -1,8 +1,9 @@
 import React from 'react'
 import { ChatMessage as ChatMessageType } from '@/types/chat'
 import { formatTimeAgo } from '@/utils'
-import { Badge, LoadingSpinner } from '@/components/common'
+import { Badge, LoadingSpinner, StarRating } from '@/components/common'
 import { RenderSpecDispatcher } from '@/components/renderers'
+import { useChatStore } from '@/store/chatStore'
 
 interface ChatMessageProps {
   message: ChatMessageType
@@ -10,6 +11,14 @@ interface ChatMessageProps {
 
 const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
   const isUser = message.role === 'user'
+  const setMessageRating = useChatStore((state) => state.setMessageRating)
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+
+  const handleRate = (rating: number) => {
+    if (currentSessionId) {
+      setMessageRating(currentSessionId, message.id, rating)
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -45,6 +54,16 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
                 <span>{formatTimeAgo(message.timestamp)}</span>
               )}
             </div>
+
+            {/* Star Rating for AI messages */}
+            {!isUser && message.status === 'success' && (
+              <div className="flex justify-end mt-2">
+                <StarRating
+                  rating={message.rating || 0}
+                  onRate={handleRate}
+                />
+              </div>
+            )}
           </div>
         </div>
       </div>

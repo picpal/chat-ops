@@ -61,6 +61,7 @@ export const ICONS = {
   SIDEBAR: 'left_panel_close',
   SIDEBAR_OPEN: 'left_panel_open',
   MORE_HORIZ: 'more_horiz',
+  SEARCH: 'search',
 } as const
 
 // App Configuration

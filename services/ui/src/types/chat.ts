@@ -29,6 +29,7 @@ export interface ChatMessage {
   queryPlan?: QueryPlan  // 이번 쿼리 조건 (후속 질문용)
   timestamp: string
   status?: MessageStatus
+  rating?: number
 }
 
 export type SessionCategory = 'today' | 'yesterday' | 'previous7days' | 'older'

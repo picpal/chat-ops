@@ -322,8 +322,7 @@ class RenderComposerService:
 
         차트 결정 원칙:
         1. 명시적 차트 키워드("그래프", "차트", "시각화") → 차트
-        2. 암시적 차트 키워드("추이", "비율" 등) + groupBy → 차트
-        3. 그 외 → 테이블 또는 텍스트
+        2. 그 외 → 테이블 또는 텍스트
         """
         data = query_result.get("data", {})
         rows = data.get("rows", [])
@@ -336,17 +335,7 @@ class RenderComposerService:
         if any(kw in message_lower for kw in explicit_chart_keywords):
             return self._compose_chart_spec(query_result, query_plan, user_message)
 
-        # 2순위: 암시적 차트 키워드 + groupBy → 차트
-        # "추이", "비율", "분포" 등 시각화 의도가 있는 키워드
-        if group_by and len(rows) > 1:
-            implicit_chart_keywords = []
-            for keywords in CHART_TYPE_KEYWORDS.values():
-                implicit_chart_keywords.extend(keywords)
-
-            if any(kw in message_lower for kw in implicit_chart_keywords):
-                return self._compose_chart_spec(query_result, query_plan, user_message)
-
-        # 3순위: 그룹화 있고 여러 행 → 테이블
+        # 2순위: 그룹화 있고 여러 행 → 테이블
         if group_by and len(rows) > 1:
             return self._compose_table_spec(query_result, query_plan, user_message)
         # 단일 집계 결과는 텍스트
