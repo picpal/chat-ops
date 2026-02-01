@@ -34,9 +34,14 @@ logs/
 .claude/*
 !.claude/agents/
 !.claude/skills/
+.claude/skills/mp4-to-gif.md
+
+# Demo assets (origin mp4 files)
+assets/demos_origin/
 
 # Test outputs
 services/ui/coverage/
+services/ui/test-results/
 
 # Work logs (local only)
 order/
