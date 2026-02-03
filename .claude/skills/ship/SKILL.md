@@ -1,7 +1,7 @@
 ---
-name: cp
+name: ship
 description: |
-  Git commit & push in one command. Trigger: "/cp", "/save", "cp", "save", "저장".
+  Git commit & push in one command. Trigger: "/ship", "ship".
   Auto: status → stage → commit → push. Use when saving work to git.
 ---
 
@@ -78,8 +78,7 @@ type(scope): description (under 50 chars)
 
 | 명령 | 동작 |
 |------|------|
-| `/cp --pr` | Commit + Push + PR 생성 |
-| `/save --pr` | Commit + Push + PR 생성 |
+| `/ship --pr` | Commit + Push + PR 생성 |
 | `/pr` | 현재 브랜치에서 PR만 생성 (이미 push된 상태) |
 
 ### PR 생성 워크플로우
@@ -163,18 +162,18 @@ Generated with Claude Code
 
 ```bash
 # Feature 브랜치에서 작업 후 PR까지 한 번에
-/cp --pr
+/ship --pr
 
 # 이미 push된 상태에서 PR만 생성
 /pr
 
 # 일반 커밋 & 푸시 (PR 없이)
-/cp
+/ship
 ```
 
 ### 7-Phase 워크플로우 통합
 
 | Phase | 명령 |
 |-------|------|
-| Phase 4 (IMPLEMENT) | `/cp` - 중간 작업 저장 |
-| Phase 6 (PR REVIEW) | `/cp --pr` 또는 `/pr` - PR 생성 |
+| Phase 4 (IMPLEMENT) | `/ship` - 중간 작업 저장 |
+| Phase 6 (PR REVIEW) | `/ship --pr` 또는 `/pr` - PR 생성 |

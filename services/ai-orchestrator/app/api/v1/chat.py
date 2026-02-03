@@ -1253,7 +1253,9 @@ async def handle_text_to_sql(
             if summary_stats_template:
                 logger.info(f"[{request_id}] LLM summaryStats template: {len(summary_stats_template)} items")
 
-            render_spec = compose_sql_render_spec(result, request.message, llm_chart_type, insight_template, summary_stats_template)
+            # QueryPlan 추출 (metricType 기반 포맷팅용)
+            query_plan = result.get("queryPlan")
+            render_spec = compose_sql_render_spec(result, request.message, llm_chart_type, insight_template, summary_stats_template, query_plan)
 
             # 집계 쿼리 메타데이터 추가
             is_aggregation = result.get("isAggregation", False)

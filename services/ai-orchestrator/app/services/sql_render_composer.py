@@ -16,9 +16,82 @@ from app.constants.render_keywords import (
     CHART_TYPE_KEYWORDS,
     DATE_FIELDS,
     CATEGORY_FIELDS,
+    IMPLICIT_CHART_KEYWORDS,
+    CHART_UNSUITABLE_CONDITIONS,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================
+# metricType 기반 포맷팅 유틸리티
+# ============================================
+
+def _get_metric_type_from_query_plan(query_plan: Optional[Dict[str, Any]], field_alias: str) -> str:
+    """QueryPlan의 aggregations에서 metricType 조회
+
+    우선순위:
+    1. QueryPlan에 명시된 metricType
+    2. 함수 기반 추론 (count → count)
+    3. 키워드 기반 fallback
+
+    Args:
+        query_plan: QueryPlan 딕셔너리
+        field_alias: 조회할 필드 alias
+
+    Returns:
+        "currency" | "count" | "percentage" | "number"
+    """
+    if query_plan:
+        for agg in query_plan.get("aggregations", []):
+            if agg.get("alias") == field_alias:
+                # 1순위: 명시된 metricType
+                if mt := agg.get("metricType"):
+                    return mt
+                # 2순위: 함수 기반 추론
+                if agg.get("function") == "count":
+                    return "count"
+
+    # 3순위: 키워드 기반 fallback
+    alias_lower = field_alias.lower()
+    if any(kw in alias_lower for kw in ("amount", "fee", "total", "net", "price", "sum")):
+        return "currency"
+    if any(kw in alias_lower for kw in ("count", "cnt", "건수")):
+        return "count"
+    if any(kw in alias_lower for kw in ("rate", "ratio", "percent", "비율")):
+        return "percentage"
+
+    return "number"
+
+
+def _format_by_metric_type(value: float, metric_type: str) -> str:
+    """메트릭 타입에 따른 값 포맷팅
+
+    Args:
+        value: 포맷팅할 숫자 값
+        metric_type: "currency" | "count" | "percentage" | "number"
+
+    Returns:
+        포맷팅된 문자열
+    """
+    if metric_type == "currency":
+        # 금액 포맷팅 (억/만 단위 변환)
+        if value >= 100000000:
+            return f"₩{value/100000000:.1f}억"
+        elif value >= 10000:
+            return f"₩{value/10000:.0f}만"
+        return f"₩{int(value):,}"
+    elif metric_type == "count":
+        # 건수 포맷팅
+        return f"{int(value):,}건"
+    elif metric_type == "percentage":
+        # 퍼센트 포맷팅
+        return f"{value:.1f}%"
+    else:
+        # 기본 숫자 포맷팅
+        if value == int(value):
+            return f"{int(value):,}"
+        return f"{value:,.1f}"
 
 
 # ============================================
@@ -51,6 +124,69 @@ def _detect_render_type_from_message(message: str) -> Optional[str]:
         return "chart"
 
     return None
+
+
+def _detect_implicit_chart_type(message: str) -> Optional[str]:
+    """암시적 키워드에서 차트 타입 추론
+
+    명시적 키워드("그래프", "차트")가 없어도 암시적 키워드로 차트 타입 추론.
+    예: "비교" → bar, "추이" → line, "분포" → pie
+
+    Args:
+        message: 사용자 질문
+
+    Returns:
+        "bar" | "line" | "pie" | None
+    """
+    msg = message.lower()
+
+    for chart_type, keywords in IMPLICIT_CHART_KEYWORDS.items():
+        if any(kw in msg for kw in keywords):
+            logger.info(f"[ImplicitChartType] Detected '{chart_type}' from implicit keywords")
+            return chart_type
+
+    return None
+
+
+def _is_chart_suitable(data: List[Dict[str, Any]], chart_type: str) -> bool:
+    """차트 렌더링이 적합한지 판단
+
+    데이터 행 수와 차트 타입에 따라 차트 렌더링 적합성 판단.
+    부적합한 경우 테이블로 렌더링하는 것이 더 적절함.
+
+    Args:
+        data: 쿼리 결과 데이터
+        chart_type: 차트 타입 ("bar", "line", "pie")
+
+    Returns:
+        True if chart is suitable, False if table is better
+    """
+    row_count = len(data)
+    max_rows = CHART_UNSUITABLE_CONDITIONS.get("max_rows_for_chart", 10)
+    max_pie_categories = CHART_UNSUITABLE_CONDITIONS.get("max_categories_for_pie", 7)
+
+    # 데이터 없음 → 테이블
+    if row_count == 0:
+        logger.info(f"[ChartSuitable] No data, using table")
+        return False
+
+    # 단일 행 집계 결과 → 텍스트/테이블 (차트 부적합)
+    if row_count == 1:
+        logger.info(f"[ChartSuitable] Single row aggregation, using table")
+        return False
+
+    # 10행 초과 → 테이블 (차트가 복잡해짐)
+    if row_count > max_rows:
+        logger.info(f"[ChartSuitable] Too many rows ({row_count} > {max_rows}), using table")
+        return False
+
+    # pie 차트 + 7개 초과 → 테이블 (파이 조각이 너무 많음)
+    if chart_type == "pie" and row_count > max_pie_categories:
+        logger.info(f"[ChartSuitable] Too many categories for pie ({row_count} > {max_pie_categories}), using table")
+        return False
+
+    logger.info(f"[ChartSuitable] Chart is suitable: {chart_type} with {row_count} rows")
+    return True
 
 
 # ============================================
@@ -408,19 +544,32 @@ def _generate_insight(
     group_by_label = get_field_label(x_key)
     metric_label = get_field_label(y_key)
 
-    # 금액 포맷팅 함수
-    def format_currency(val: float) -> str:
-        if val >= 1000:
-            return f"₩{int(val):,}"
-        return f"{val:,.1f}"
+    # y_key에서 메트릭 유형 추론 (플레이스홀더 포맷팅에 사용)
+    y_key_lower = y_key.lower()
+    is_count_metric = any(kw in y_key_lower for kw in ("count", "cnt", "건수"))
+    is_currency_metric = any(kw in y_key_lower for kw in ("amount", "fee", "total", "net", "price", "sum"))
 
-    # 플레이스홀더 값 구성
+    # 숫자 포맷팅 함수 (메트릭 타입에 따라 통화 심볼/건 접미사 추가)
+    def format_number(val: float, with_unit: bool = True) -> str:
+        if val == int(val):
+            formatted = f"{int(val):,}"
+        else:
+            formatted = f"{val:,.1f}"
+
+        if with_unit:
+            if is_currency_metric:
+                return f"₩{formatted}"
+            elif is_count_metric:
+                return f"{formatted}건"
+        return formatted
+
+    # 플레이스홀더 값 구성 (메트릭 타입에 따라 단위 포함)
     placeholders = {
         "{count}": f"{count:,}",
-        "{total}": format_currency(total),
-        "{avg}": format_currency(avg),
-        "{max}": format_currency(max_val),
-        "{min}": format_currency(min_val),
+        "{total}": format_number(total),
+        "{avg}": format_number(avg),
+        "{max}": format_number(max_val),
+        "{min}": format_number(min_val),
         "{maxCategory}": max_category,
         "{minCategory}": min_category,
         "{trend}": trend or "",
@@ -441,15 +590,26 @@ def _generate_insight(
         logger.info(f"[Insight] Generated from LLM template: {content[:100]}...")
         return {"content": content, "source": "llm"}
 
-    # 폴백: 규칙 기반 템플릿
+    # 폴백: 규칙 기반 템플릿 (metricType 기반 단위 결정)
+    # 단위 결정 (is_count_metric, is_currency_metric는 위에서 이미 정의됨)
+    if is_count_metric:
+        unit_suffix = "건"
+        value_prefix = ""
+    elif is_currency_metric:
+        unit_suffix = ""
+        value_prefix = "₩"
+    else:
+        unit_suffix = ""
+        value_prefix = ""
+
     if chart_type == "line":
-        content = f"{group_by_label}별 {metric_label} 추이입니다. 총 {count:,}개 데이터의 합계는 {format_currency(total)}입니다."
+        content = f"{group_by_label}별 {metric_label} 추이입니다. 총 {count:,}개 데이터의 합계는 {value_prefix}{format_number(total, with_unit=False)}{unit_suffix}입니다."
         if trend:
             content += f" 전반적으로 {trend} 추세입니다."
     elif chart_type == "pie":
         content = f"{group_by_label}별 {metric_label} 분포입니다. {max_category}가 가장 큰 비중을 차지합니다."
     else:  # bar
-        content = f"{group_by_label}별 {metric_label} 비교입니다. {max_category}가 {format_currency(max_val)}로 가장 높습니다."
+        content = f"{group_by_label}별 {metric_label} 비교입니다. {max_category}가 {value_prefix}{format_number(max_val, with_unit=False)}{unit_suffix}로 가장 높습니다."
 
     logger.info(f"[Insight] Generated from rule-based template: {content[:100]}...")
     return {"content": content, "source": "template"}
@@ -579,7 +739,8 @@ def _generate_rule_based_stats(
     stats: Dict[str, Any],
     chart_type: str,
     x_key: str,
-    y_key: str
+    y_key: str,
+    query_plan: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """규칙 기반 Summary Stats 생성 (폴백)
 
@@ -588,6 +749,7 @@ def _generate_rule_based_stats(
         chart_type: 차트 타입
         x_key: X축 키
         y_key: Y축 키
+        query_plan: QueryPlan (metricType 조회용)
 
     Returns:
         summaryStats 구조
@@ -597,7 +759,11 @@ def _generate_rule_based_stats(
 
     items = []
 
-    # 금액 포맷팅 함수
+    # metricType 조회 (QueryPlan 기반)
+    metric_type = _get_metric_type_from_query_plan(query_plan, y_key)
+    logger.info(f"[SummaryStats] y_key={y_key}, metric_type={metric_type}")
+
+    # 금액 포맷팅 함수 (legacy, fallback용)
     def fmt_currency(val: float) -> str:
         if val >= 100000000:  # 억 단위
             return f"₩{val/100000000:.1f}억"
@@ -607,6 +773,10 @@ def _generate_rule_based_stats(
 
     def fmt_percent(val: float) -> str:
         return f"{val:.1f}%"
+
+    # metricType 기반 포맷팅 함수 (신규)
+    def fmt_value(val: float) -> str:
+        return _format_by_metric_type(val, metric_type)
 
     # 차트 유형별 항목 구성
     if chart_type == "pie":
@@ -667,7 +837,7 @@ def _generate_rule_based_stats(
             {
                 "key": "peak_time",
                 "label": "피크 시점",
-                "value": f"{stats.get('peak_time', '')} ({fmt_currency(stats.get('max', 0))})",
+                "value": f"{stats.get('peak_time', '')} ({fmt_value(stats.get('max', 0))})",
                 "type": "text",
                 "icon": "show_chart"
             },
@@ -688,8 +858,8 @@ def _generate_rule_based_stats(
             {
                 "key": "avg",
                 "label": "평균",
-                "value": stats.get("avg", 0),
-                "type": "currency",
+                "value": fmt_value(stats.get("avg", 0)),
+                "type": metric_type,
                 "icon": "calculate"
             }
         ]
@@ -703,7 +873,7 @@ def _generate_rule_based_stats(
             {
                 "key": "rank_1",
                 "label": "1위",
-                "value": f"{stats.get('max_category', '')} ({fmt_currency(stats.get('max', 0))})",
+                "value": f"{stats.get('max_category', '')} ({fmt_value(stats.get('max', 0))})",
                 "type": "text",
                 "highlight": True,
                 "icon": "emoji_events"
@@ -711,22 +881,22 @@ def _generate_rule_based_stats(
             {
                 "key": "rank_last",
                 "label": "최하위",
-                "value": f"{stats.get('min_category', '')} ({fmt_currency(stats.get('min', 0))})",
+                "value": f"{stats.get('min_category', '')} ({fmt_value(stats.get('min', 0))})",
                 "type": "text",
                 "icon": "trending_down"
             },
             {
                 "key": "avg",
                 "label": "평균",
-                "value": stats.get("avg", 0),
-                "type": "currency",
+                "value": fmt_value(stats.get("avg", 0)),
+                "type": metric_type,
                 "icon": "calculate"
             },
             {
                 "key": "range",
                 "label": "범위",
-                "value": fmt_currency(stats.get("range", 0)),
-                "type": "currency",
+                "value": fmt_value(stats.get("range", 0)),
+                "type": metric_type,
                 "icon": "unfold_more"
             },
             {
@@ -812,7 +982,8 @@ def _generate_summary_stats(
     x_key: str,
     y_key: str,
     chart_type: str,
-    template: Optional[List[Dict[str, Any]]] = None
+    template: Optional[List[Dict[str, Any]]] = None,
+    query_plan: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """차트 데이터에 대한 Summary Stats 생성
 
@@ -824,6 +995,7 @@ def _generate_summary_stats(
         y_key: Y축 필드 키
         chart_type: 차트 타입 (line, bar, pie)
         template: LLM이 생성한 summaryStatsTemplate (선택적)
+        query_plan: QueryPlan (metricType 조회용)
 
     Returns:
         summaryStats 구조
@@ -843,8 +1015,8 @@ def _generate_summary_stats(
         logger.info(f"[SummaryStats] Generated from LLM template: {len(result.get('items', []))} items")
         return result
 
-    # 폴백: 규칙 기반 생성
-    result = _generate_rule_based_stats(stats, chart_type, x_key, y_key)
+    # 폴백: 규칙 기반 생성 (query_plan 전달)
+    result = _generate_rule_based_stats(stats, chart_type, x_key, y_key, query_plan)
     logger.info(f"[SummaryStats] Generated from rules: {len(result.get('items', []))} items")
     return result
 
@@ -987,7 +1159,9 @@ def _generate_multi_series_summary_stats(
     x_key: str,
     series_keys: List[str],
     chart_type: str,
-    template: Optional[List[Dict[str, Any]]] = None
+    template: Optional[List[Dict[str, Any]]] = None,
+    query_plan: Optional[Dict[str, Any]] = None,
+    y_key: Optional[str] = None
 ) -> Dict[str, Any]:
     """멀티 시리즈 차트의 Summary Stats 생성
 
@@ -999,6 +1173,8 @@ def _generate_multi_series_summary_stats(
         series_keys: 시리즈 키 리스트
         chart_type: 차트 타입
         template: LLM 템플릿 (선택적)
+        query_plan: QueryPlan (metricType 조회용)
+        y_key: Y축 키 (metricType 조회용)
 
     Returns:
         summaryStats 구조
@@ -1018,16 +1194,16 @@ def _generate_multi_series_summary_stats(
         logger.info(f"[MultiSeriesSummaryStats] Generated from LLM template: {len(result.get('items', []))} items")
         return result
 
+    # metricType 조회 (QueryPlan 기반)
+    metric_type = _get_metric_type_from_query_plan(query_plan, y_key or "")
+    logger.info(f"[MultiSeriesSummaryStats] y_key={y_key}, metric_type={metric_type}")
+
     # 규칙 기반 생성 (멀티 시리즈 전용)
     items = []
 
-    # 금액 포맷팅 함수
-    def fmt_currency(val: float) -> str:
-        if val >= 100000000:  # 억 단위
-            return f"₩{val/100000000:.1f}억"
-        elif val >= 10000:  # 만 단위
-            return f"₩{val/10000:.0f}만"
-        return f"₩{int(val):,}"
+    # metricType 기반 포맷팅 함수
+    def fmt_value(val: float) -> str:
+        return _format_by_metric_type(val, metric_type)
 
     def fmt_percent(val: float) -> str:
         return f"{val:.1f}%"
@@ -1049,7 +1225,7 @@ def _generate_multi_series_summary_stats(
     items.append({
         "key": "peak_time",
         "label": "피크 시점",
-        "value": f"{stats.get('peak_time', '')} ({fmt_currency(stats.get('max', 0))})",
+        "value": f"{stats.get('peak_time', '')} ({fmt_value(stats.get('max', 0))})",
         "type": "text",
         "icon": "show_chart"
     })
@@ -1070,8 +1246,8 @@ def _generate_multi_series_summary_stats(
     items.append({
         "key": "avg",
         "label": "평균",
-        "value": stats.get("avg", 0),
-        "type": "currency",
+        "value": fmt_value(stats.get("avg", 0)),
+        "type": metric_type,
         "icon": "calculate"
     })
 
@@ -1099,7 +1275,8 @@ def _compose_chart_render_spec(
     question: str,
     llm_chart_type: Optional[str] = None,
     insight_template: Optional[str] = None,
-    summary_stats_template: Optional[List[Dict[str, Any]]] = None
+    summary_stats_template: Optional[List[Dict[str, Any]]] = None,
+    query_plan: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """차트 타입의 RenderSpec 구성 (멀티 시리즈 지원)
 
@@ -1109,6 +1286,7 @@ def _compose_chart_render_spec(
         llm_chart_type: LLM이 추천한 차트 타입 (우선 사용)
         insight_template: LLM이 생성한 인사이트 템플릿 (선택적)
         summary_stats_template: LLM이 생성한 summaryStats 템플릿 (선택적)
+        query_plan: QueryPlan (metricType 조회용)
 
     Returns:
         차트 타입 RenderSpec (insight, summaryStats 필드 포함)
@@ -1257,7 +1435,9 @@ def _compose_chart_render_spec(
             x_key=x_key,
             series_keys=series_keys,
             chart_type=chart_type,
-            template=summary_stats_template
+            template=summary_stats_template,
+            query_plan=query_plan,
+            y_key=y_key
         )
     else:
         # 단일 시리즈: 기존 로직
@@ -1266,7 +1446,8 @@ def _compose_chart_render_spec(
             x_key=x_key,
             y_key=y_key,
             chart_type=chart_type,
-            template=summary_stats_template
+            template=summary_stats_template,
+            query_plan=query_plan
         )
     render_spec["chart"]["summaryStats"] = summary_stats
 
@@ -1450,7 +1631,8 @@ def compose_sql_render_spec(
     question: str,
     llm_chart_type: Optional[str] = None,
     insight_template: Optional[str] = None,
-    summary_stats_template: Optional[List[Dict[str, Any]]] = None
+    summary_stats_template: Optional[List[Dict[str, Any]]] = None,
+    query_plan: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """SQL 실행 결과를 RenderSpec으로 변환
 
@@ -1464,9 +1646,10 @@ def compose_sql_render_spec(
         llm_chart_type: LLM이 추천한 차트 타입 (선택적)
         insight_template: LLM이 생성한 인사이트 템플릿 (선택적)
         summary_stats_template: LLM이 생성한 summaryStats 템플릿 (선택적)
+        query_plan: QueryPlan (metricType 조회용)
     """
     # TC-001: 차트 렌더링 타입 감지
-    # 사용자 키워드 기반 렌더링 타입 우선 감지
+    # 사용자 키워드 기반 렌더링 타입 우선 감지 (1순위: 명시적 키워드)
     render_type = _detect_render_type_from_message(question)
 
     # TC-001-1: 테이블 키워드 감지 시 LLM chartType 무시
@@ -1477,8 +1660,19 @@ def compose_sql_render_spec(
         # 사용자가 명시적으로 차트를 요청한 경우에만 차트 렌더링
         # LLM 추천 chartType이 있으면 활용, 없으면 규칙 기반 결정
         logger.info(f"[compose_sql_render_spec] User requested chart, LLM chartType={llm_chart_type}")
-        return _compose_chart_render_spec(result, question, llm_chart_type, insight_template, summary_stats_template)
+        return _compose_chart_render_spec(result, question, llm_chart_type, insight_template, summary_stats_template, query_plan)
+    else:
+        # 2순위: 암시적 키워드 + 데이터 패턴 분석 (명시적 키워드 없는 경우)
+        data_for_check = result.get("data", [])
+        implicit_chart_type = _detect_implicit_chart_type(question)
 
+        if implicit_chart_type and data_for_check and _is_chart_suitable(data_for_check, implicit_chart_type):
+            logger.info(f"[compose_sql_render_spec] Implicit chart detected: {implicit_chart_type}")
+            return _compose_chart_render_spec(
+                result, question, implicit_chart_type, insight_template, summary_stats_template, query_plan
+            )
+
+    # 3순위: 기본 테이블 렌더링
     data = result.get("data", [])
     row_count = result.get("rowCount", 0)
     total_count = result.get("totalCount") or row_count

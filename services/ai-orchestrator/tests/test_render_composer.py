@@ -1705,3 +1705,405 @@ class TestMultiSeriesSummaryStats:
         peak_item = next((item for item in summary_stats["items"] if item["key"] == "peak_time"), None)
         if peak_item:
             assert "2025-12" in peak_item["value"]
+
+
+# ============================================
+# TC-MetricType: metricType 기반 Summary Stats 포맷팅 테스트
+# ============================================
+
+class TestMetricTypeFormatting:
+    """
+    metricType 기반 Summary Stats 포맷팅 테스트
+
+    핵심 시나리오:
+    1. QueryPlan에서 metricType 추출
+    2. metricType별 값 포맷팅 (currency, count, percentage, number)
+    3. Summary Stats에서 올바른 단위 표시
+    4. Fallback 로직 (metricType 없는 경우)
+    """
+
+    def setup_method(self):
+        from app.services.sql_render_composer import (
+            _get_metric_type_from_query_plan,
+            _format_by_metric_type,
+            _generate_rule_based_stats,
+            compose_sql_render_spec,
+        )
+        self.get_metric_type = _get_metric_type_from_query_plan
+        self.format_by_metric_type = _format_by_metric_type
+        self.generate_rule_based_stats = _generate_rule_based_stats
+        self.compose = compose_sql_render_spec
+
+    # ----------------------------------------
+    # 1. _get_metric_type_from_query_plan 테스트
+    # ----------------------------------------
+
+    def test_get_metric_type_from_query_plan_explicit(self):
+        """QueryPlan에 명시된 metricType을 반환"""
+        query_plan = {
+            "aggregations": [
+                {"function": "count", "field": "*", "alias": "paymentCount", "metricType": "count"},
+                {"function": "sum", "field": "amount", "alias": "totalAmount", "metricType": "currency"},
+            ]
+        }
+
+        assert self.get_metric_type(query_plan, "paymentCount") == "count"
+        assert self.get_metric_type(query_plan, "totalAmount") == "currency"
+
+    def test_get_metric_type_from_query_plan_count_function_inference(self):
+        """metricType 없고 function=count면 count로 추론"""
+        query_plan = {
+            "aggregations": [
+                {"function": "count", "field": "*", "alias": "cnt"}  # metricType 없음
+            ]
+        }
+
+        assert self.get_metric_type(query_plan, "cnt") == "count"
+
+    def test_get_metric_type_fallback_keyword_amount(self):
+        """metricType 없고 alias에 amount 키워드 → currency"""
+        query_plan = {
+            "aggregations": [
+                {"function": "sum", "field": "amount", "alias": "totalAmount"}  # metricType 없음
+            ]
+        }
+
+        assert self.get_metric_type(query_plan, "totalAmount") == "currency"
+
+    def test_get_metric_type_fallback_keyword_count(self):
+        """metricType 없고 alias에 count 키워드 → count"""
+        query_plan = {
+            "aggregations": [
+                {"function": "sum", "field": "qty", "alias": "orderCount"}  # metricType 없음
+            ]
+        }
+
+        assert self.get_metric_type(query_plan, "orderCount") == "count"
+
+    def test_get_metric_type_fallback_keyword_fee(self):
+        """metricType 없고 alias에 fee 키워드 → currency"""
+        assert self.get_metric_type(None, "totalFee") == "currency"
+        assert self.get_metric_type({}, "merchantFee") == "currency"
+
+    def test_get_metric_type_fallback_keyword_rate(self):
+        """metricType 없고 alias에 rate/ratio 키워드 → percentage"""
+        assert self.get_metric_type(None, "successRate") == "percentage"
+        assert self.get_metric_type(None, "refundRatio") == "percentage"
+
+    def test_get_metric_type_fallback_default_number(self):
+        """매칭되는 키워드 없으면 number 반환"""
+        assert self.get_metric_type(None, "unknownField") == "number"
+        assert self.get_metric_type({}, "someValue") == "number"
+
+    def test_get_metric_type_none_query_plan(self):
+        """query_plan이 None이면 키워드 기반 fallback 사용"""
+        assert self.get_metric_type(None, "totalAmount") == "currency"
+        assert self.get_metric_type(None, "paymentCount") == "count"
+        assert self.get_metric_type(None, "randomField") == "number"
+
+    # ----------------------------------------
+    # 2. _format_by_metric_type 테스트
+    # ----------------------------------------
+
+    def test_format_currency_large(self):
+        """금액 포맷팅 - 억 단위"""
+        result = self.format_by_metric_type(1500000000, "currency")
+        assert "억" in result
+        assert "₩" in result or "15" in result
+
+    def test_format_currency_medium(self):
+        """금액 포맷팅 - 만 단위"""
+        result = self.format_by_metric_type(50000, "currency")
+        assert "만" in result or "₩" in result
+
+    def test_format_currency_small(self):
+        """금액 포맷팅 - 작은 금액"""
+        result = self.format_by_metric_type(1234, "currency")
+        assert "₩" in result
+        assert "1,234" in result
+
+    def test_format_count(self):
+        """건수 포맷팅"""
+        result = self.format_by_metric_type(419, "count")
+        assert result == "419건"
+
+        result = self.format_by_metric_type(1234567, "count")
+        assert "1,234,567건" in result
+
+    def test_format_percentage(self):
+        """퍼센트 포맷팅"""
+        result = self.format_by_metric_type(95.25, "percentage")
+        assert "95.3%" in result or "95.2%" in result
+
+    def test_format_number_integer(self):
+        """일반 숫자 포맷팅 - 정수"""
+        result = self.format_by_metric_type(12345.0, "number")
+        assert "12,345" in result
+
+    def test_format_number_decimal(self):
+        """일반 숫자 포맷팅 - 소수"""
+        result = self.format_by_metric_type(123.456, "number")
+        assert "123" in result
+
+    # ----------------------------------------
+    # 3. Summary Stats에서 metricType 적용 테스트
+    # ----------------------------------------
+
+    def test_summary_stats_count_metric_type(self):
+        """
+        결제 건수 차트에서 Summary Stats가 '건' 단위로 표시되는지 확인
+
+        핵심 검증:
+        - 피크 시점: "2025-11 (419건)" (₩419가 아님)
+        - 평균: "365건" (₩365가 아님)
+        """
+        stats = {
+            "count": 12,
+            "total": 4376,
+            "avg": 364.67,
+            "max": 419,
+            "min": 312,
+            "max_category": "2025-11",
+            "min_category": "2025-01",
+            "peak_time": "2025-11",
+            "trend": "증가",
+            "growth_rate": 15.3,
+            "period_start": "2025-01",
+            "period_end": "2025-12",
+        }
+
+        query_plan = {
+            "aggregations": [
+                {"function": "count", "field": "*", "alias": "paymentCount", "metricType": "count"}
+            ]
+        }
+
+        result = self.generate_rule_based_stats(stats, "line", "month", "paymentCount", query_plan)
+
+        assert result["source"] == "rule"
+        items = result["items"]
+
+        # 피크 시점 확인 - "건" 포함, "₩" 미포함
+        peak_item = next((item for item in items if item["key"] == "peak_time"), None)
+        assert peak_item is not None
+        assert "건" in peak_item["value"], f"Expected '건' in peak_time, got: {peak_item['value']}"
+        assert "₩" not in peak_item["value"], f"Expected no '₩' in peak_time, got: {peak_item['value']}"
+
+        # 평균 확인 - type이 count
+        avg_item = next((item for item in items if item["key"] == "avg"), None)
+        assert avg_item is not None
+        assert avg_item["type"] == "count", f"Expected type='count', got: {avg_item['type']}"
+        assert "건" in avg_item["value"], f"Expected '건' in avg, got: {avg_item['value']}"
+
+    def test_summary_stats_currency_metric_type(self):
+        """
+        결제 금액 차트에서 Summary Stats가 '₩' 단위로 표시되는지 확인
+        """
+        stats = {
+            "count": 12,
+            "total": 150000000,
+            "avg": 12500000,
+            "max": 20000000,
+            "min": 5000000,
+            "max_category": "2025-11",
+            "min_category": "2025-02",
+            "peak_time": "2025-11",
+            "trend": "증가",
+            "growth_rate": 25.5,
+            "period_start": "2025-01",
+            "period_end": "2025-12",
+        }
+
+        query_plan = {
+            "aggregations": [
+                {"function": "sum", "field": "amount", "alias": "totalAmount", "metricType": "currency"}
+            ]
+        }
+
+        result = self.generate_rule_based_stats(stats, "line", "month", "totalAmount", query_plan)
+
+        items = result["items"]
+
+        # 피크 시점 확인 - "₩" 포함
+        peak_item = next((item for item in items if item["key"] == "peak_time"), None)
+        assert peak_item is not None
+        assert "₩" in peak_item["value"] or "억" in peak_item["value"] or "만" in peak_item["value"]
+
+        # 평균 확인 - type이 currency
+        avg_item = next((item for item in items if item["key"] == "avg"), None)
+        assert avg_item is not None
+        assert avg_item["type"] == "currency"
+
+    def test_summary_stats_bar_chart_count(self):
+        """
+        Bar 차트에서 건수 metricType 적용 확인
+        """
+        stats = {
+            "count": 5,
+            "total": 1500,
+            "avg": 300,
+            "max": 500,
+            "min": 100,
+            "max_category": "M001",
+            "min_category": "M005",
+            "range": 400,
+            "max_vs_avg": 1.67,
+        }
+
+        query_plan = {
+            "aggregations": [
+                {"function": "count", "field": "*", "alias": "orderCount", "metricType": "count"}
+            ]
+        }
+
+        result = self.generate_rule_based_stats(stats, "bar", "merchantId", "orderCount", query_plan)
+
+        items = result["items"]
+
+        # 1위 항목 - "건" 포함
+        rank_1_item = next((item for item in items if item["key"] == "rank_1"), None)
+        assert rank_1_item is not None
+        assert "건" in rank_1_item["value"], f"Expected '건' in rank_1, got: {rank_1_item['value']}"
+        assert "₩" not in rank_1_item["value"]
+
+        # 평균 항목 - type이 count
+        avg_item = next((item for item in items if item["key"] == "avg"), None)
+        assert avg_item is not None
+        assert avg_item["type"] == "count"
+
+    # ----------------------------------------
+    # 4. compose_sql_render_spec 통합 테스트
+    # ----------------------------------------
+
+    def test_compose_with_query_plan_count_metric(self):
+        """
+        compose_sql_render_spec에서 query_plan의 metricType이 적용되는지 확인
+        """
+        result = {
+            "data": [
+                {"month": "2025-01", "payment_count": 312},
+                {"month": "2025-06", "payment_count": 356},
+                {"month": "2025-11", "payment_count": 419},
+                {"month": "2025-12", "payment_count": 398},
+            ],
+            "rowCount": 4,
+            "sql": "SELECT month, COUNT(*) as payment_count FROM payments GROUP BY month",
+            "executionTimeMs": 15
+        }
+
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "aggregations": [
+                {"function": "count", "field": "*", "alias": "payment_count", "metricType": "count"}
+            ],
+            "groupBy": ["month"]
+        }
+
+        spec = self.compose(
+            result,
+            "월별 결제 건수 추이 그래프로 보여줘",
+            llm_chart_type="line",
+            query_plan=query_plan
+        )
+
+        assert spec["type"] == "chart"
+
+        # summaryStats 확인
+        summary_stats = spec["chart"].get("summaryStats", {})
+        items = summary_stats.get("items", [])
+
+        if items:
+            # 피크 시점에 "건" 포함 확인
+            peak_item = next((item for item in items if item["key"] == "peak_time"), None)
+            if peak_item:
+                assert "₩" not in peak_item["value"], f"Count metric should not have ₩: {peak_item['value']}"
+
+    def test_compose_without_query_plan_fallback(self):
+        """
+        query_plan 없이도 키워드 기반 fallback이 작동하는지 확인
+        """
+        result = {
+            "data": [
+                {"month": "2025-01", "total_amount": 10000000},
+                {"month": "2025-06", "total_amount": 15000000},
+            ],
+            "rowCount": 2,
+            "sql": "SELECT month, SUM(amount) as total_amount FROM payments GROUP BY month",
+            "executionTimeMs": 10
+        }
+
+        # query_plan 없이 호출
+        spec = self.compose(
+            result,
+            "월별 결제 금액 추이 그래프",
+            llm_chart_type="line",
+            query_plan=None  # 명시적으로 None
+        )
+
+        assert spec["type"] == "chart"
+        # 에러 없이 생성되어야 함
+
+    # ----------------------------------------
+    # 5. render_composer._build_aggregate_columns 테스트
+    # ----------------------------------------
+
+    def test_build_aggregate_columns_with_metric_type(self):
+        """
+        _build_aggregate_columns에서 metricType이 col_type에 반영되는지 확인
+        """
+        from app.services.render_composer import RenderComposerService
+
+        service = RenderComposerService()
+
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["merchantId"],
+            "aggregations": [
+                {"function": "count", "field": "*", "alias": "paymentCount", "metricType": "count"},
+                {"function": "sum", "field": "amount", "alias": "totalAmount", "metricType": "currency"},
+            ]
+        }
+
+        rows = [
+            {"merchantId": "M001", "paymentCount": 100, "totalAmount": 5000000},
+        ]
+
+        columns = service._build_aggregate_columns(query_plan, rows)
+
+        # paymentCount는 metricType=count → col_type=number
+        count_col = next((c for c in columns if c["key"] == "paymentCount"), None)
+        assert count_col is not None
+        assert count_col["type"] == "number"  # count는 number로 매핑
+
+        # totalAmount는 metricType=currency → col_type=currency
+        amount_col = next((c for c in columns if c["key"] == "totalAmount"), None)
+        assert amount_col is not None
+        assert amount_col["type"] == "currency"
+
+    def test_build_aggregate_columns_fallback_without_metric_type(self):
+        """
+        metricType 없을 때 키워드 기반 fallback 작동 확인
+        """
+        from app.services.render_composer import RenderComposerService
+
+        service = RenderComposerService()
+
+        query_plan = {
+            "entity": "Payment",
+            "operation": "aggregate",
+            "groupBy": ["merchantId"],
+            "aggregations": [
+                {"function": "sum", "field": "amount", "alias": "totalAmount"},  # metricType 없음
+            ]
+        }
+
+        rows = [{"merchantId": "M001", "totalAmount": 5000000}]
+
+        columns = service._build_aggregate_columns(query_plan, rows)
+
+        # totalAmount는 alias에 amount 포함 → currency로 추론
+        amount_col = next((c for c in columns if c["key"] == "totalAmount"), None)
+        assert amount_col is not None
+        assert amount_col["type"] == "currency"

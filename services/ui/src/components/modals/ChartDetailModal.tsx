@@ -157,8 +157,15 @@ const ChartDetailModal: React.FC = () => {
         backgroundColor: '#0f172a',
         border: 'none',
         borderRadius: '8px',
-        color: '#fff',
         fontSize: '12px',
+      },
+      itemStyle: {
+        color: '#fff',
+      },
+      labelStyle: {
+        color: '#fff',
+        fontWeight: 600,
+        marginBottom: '4px',
       },
     }
 
@@ -356,6 +363,9 @@ const ChartDetailModal: React.FC = () => {
           )
         }
 
+        // Calculate total for percentage display in tooltip
+        const pieTotal = pieChartData.reduce((sum, item) => sum + (item[pieDataKey] || 0), 0)
+
         return (
           <PieChart>
             <Pie
@@ -374,7 +384,20 @@ const ChartDetailModal: React.FC = () => {
                 <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
               ))}
             </Pie>
-            <Tooltip {...tooltipStyle} />
+            <Tooltip
+              formatter={(value: number, name: string) => {
+                const percentage = pieTotal > 0 ? ((value / pieTotal) * 100).toFixed(1) : '0'
+                return [`${formatNumber(value)} (${percentage}%)`, name]
+              }}
+              contentStyle={{
+                backgroundColor: '#1e293b',
+                border: '1px solid #334155',
+                borderRadius: '8px',
+                padding: '8px 12px',
+              }}
+              itemStyle={{ color: '#f1f5f9' }}
+              labelStyle={{ color: '#f1f5f9', fontWeight: 600 }}
+            />
             <Legend
               layout="horizontal"
               verticalAlign="bottom"

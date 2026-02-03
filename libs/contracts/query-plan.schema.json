@@ -72,6 +72,11 @@
           "alias": {
             "type": "string",
             "description": "집계 결과 별칭"
+          },
+          "metricType": {
+            "type": "string",
+            "enum": ["currency", "count", "percentage", "number"],
+            "description": "메트릭의 의미적 유형. currency=금액, count=건수, percentage=비율, number=기타숫자. LLM이 필드 의미를 분석하여 결정"
           }
         }
       }

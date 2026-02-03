@@ -156,6 +156,10 @@ class Aggregation(BaseModel):
     alias: Optional[str] = Field(default=None, description="결과 별칭")
     displayLabel: Optional[str] = Field(default=None, description="사용자에게 표시할 한글 레이블 (예: '결제 금액 합계')")
     currency: Optional[str] = Field(default=None, description="화폐 단위: KRW, USD, null(화폐 아님)")
+    metricType: Optional[str] = Field(
+        default=None,
+        description="메트릭 의미 유형: currency(금액), count(건수), percentage(비율), number(기타숫자). 필드 의미에 따라 결정"
+    )
 
 
 class OrderBy(BaseModel):
@@ -1422,8 +1426,21 @@ clarification이 필요하면 "YES", 필요 없으면 "NO"만 응답하세요.
   - function: "sum", field: "amount", alias: "totalAmount"
   - displayLabel: "결제 금액 합계" (한글로 자연스럽게)
   - currency: "USD" 또는 "KRW" (데이터 화폐 단위에 맞게)
-- "평균" → function: "avg", displayLabel: "평균 결제 금액", currency 설정
-- "개수", "몇 건" → function: "count", field: "*", displayLabel: "총 건수", currency: null
+  - **metricType: "currency"** (금액 필드이므로)
+- "평균" → function: "avg", displayLabel: "평균 결제 금액", currency 설정, **metricType: "currency"**
+- "개수", "몇 건" → function: "count", field: "*", displayLabel: "총 건수", currency: null, **metricType: "count"**
+
+**중요: metricType 필드 (Summary Stats 포맷팅용)**
+aggregations 생성 시 각 항목에 **metricType**을 필수로 포함하세요:
+- **"currency"**: 금액 관련 (amount, fee, totalAmount, netAmount, 수수료 등)
+- **"count"**: 건수 관련 (paymentCount, refundCount, count(*) 등)
+- **"percentage"**: 비율 (rate, ratio, 백분율)
+- **"number"**: 기타 숫자 (기본값)
+
+예시:
+{{{{ "function": "sum", "field": "amount", "alias": "totalAmount", "metricType": "currency" }}}}
+{{{{ "function": "count", "field": "*", "alias": "paymentCount", "metricType": "count" }}}}
+{{{{ "function": "avg", "field": "amount", "alias": "avgAmount", "metricType": "currency" }}}}
 
 **중요: displayLabel과 currency는 LLM이 문맥에 맞게 자연스럽게 설정**
 - Payment 엔티티의 amount 필드는 일반적으로 USD (달러)

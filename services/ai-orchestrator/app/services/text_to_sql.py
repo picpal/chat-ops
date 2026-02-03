@@ -843,20 +843,108 @@ chartType이 line/bar/pie인 경우에만 작성하세요. 플레이스홀더를
 
 **사용 가능한 플레이스홀더:**
 - {count}: 데이터 포인트 수
-- {total}: Y축 값 합계
-- {avg}: 평균값
-- {max}: 최대값
-- {min}: 최소값
+- {total}: Y축 값 합계 (숫자만, 단위는 템플릿에 직접 작성)
+- {avg}: 평균값 (숫자만, 단위는 템플릿에 직접 작성)
+- {max}: 최대값 (숫자만, 단위는 템플릿에 직접 작성)
+- {min}: 최소값 (숫자만, 단위는 템플릿에 직접 작성)
 - {maxCategory}: 최대값을 가진 X축 항목
 - {minCategory}: 최소값을 가진 X축 항목
 - {trend}: 추세 (증가/감소/유지, line 차트에서만)
 - {groupBy}: X축 필드명 (한글)
 - {metric}: Y축 필드명 (한글)
 
+**⚠️ 중요: 단위 표기는 메트릭 유형에 맞게 템플릿에 직접 작성하세요!**
+- **금액 메트릭** (amount, fee, totalAmount 등): "₩{max}", "총 ₩{total}"
+- **건수 메트릭** (count, paymentCount 등): "{max}건", "총 {total}건"
+- **비율 메트릭** (rate, ratio 등): "{max}%"
+
 **예시:**
-- 시계열(line): "{groupBy}별 {metric} 추이입니다. 총 {count}개 {groupBy}의 데이터를 분석한 결과, {trend} 추세를 보이며 최고점은 {max}입니다."
-- 비교(bar): "{groupBy}별 {metric} 비교 결과, {maxCategory}가 {max}로 가장 높고, {minCategory}가 {min}로 가장 낮습니다."
+- 건수 시계열(line): "{groupBy}별 {metric} 추이입니다. 총 {count}개 {groupBy}의 데이터를 분석한 결과, {trend} 추세를 보이며 최고점은 {max}건입니다."
+- 금액 시계열(line): "{groupBy}별 {metric} 추이입니다. 총 {count}개 {groupBy}의 데이터를 분석한 결과, {trend} 추세를 보이며 최고점은 ₩{max}입니다."
+- 건수 비교(bar): "{groupBy}별 {metric} 비교 결과, {maxCategory}가 {max}건으로 가장 많고, {minCategory}가 {min}건으로 가장 적습니다."
+- 금액 비교(bar): "{groupBy}별 {metric} 비교 결과, {maxCategory}가 ₩{max}로 가장 높고, {minCategory}가 ₩{min}로 가장 낮습니다."
 - 분포(pie): "{groupBy}별 {metric} 분포입니다. {maxCategory}가 가장 큰 비중을 차지하며, 총 {count}개 항목이 있습니다."
+""")
+
+        # 복잡한 쿼리 패턴 가이드
+        prompt_parts.append("""
+## 복잡한 쿼리 패턴 가이드
+
+### 패턴 1: 상위 N개 엔티티의 세부 집계 (Top N + Secondary Aggregation)
+**인식 키워드**: "상위 N개", "Top N", "가장 많은 N개", "오류가 많은 N개" + "~별 집계/조회"
+
+**⚠️ 중요**: "상위 N개"가 포함된 질문에서 LIMIT N은 반드시 CTE 안에서 사용!
+
+**올바른 SQL 구조**:
+```sql
+WITH top_entities AS (
+    -- 1단계: 상위 N개 엔티티 식별
+    SELECT entity_id, COUNT(*) as total_count
+    FROM main_table
+    WHERE [필터 조건]
+    GROUP BY entity_id
+    ORDER BY total_count DESC
+    LIMIT N
+)
+SELECT t.entity_id, dimension_column, COUNT(*) AS count
+FROM main_table t
+JOIN top_entities te ON t.entity_id = te.entity_id
+WHERE [동일 필터 조건]
+GROUP BY t.entity_id, dimension_column
+ORDER BY t.entity_id, dimension_column;
+```
+
+**실제 예시** (오류 많은 상위 5개 가맹점의 시간대별 오류):
+```sql
+WITH top_error_merchants AS (
+    SELECT merchant_id, COUNT(*) as error_count
+    FROM payments
+    WHERE created_at >= NOW() - INTERVAL '3 months' AND status = 'ABORTED'
+    GROUP BY merchant_id
+    ORDER BY error_count DESC
+    LIMIT 5
+)
+SELECT p.merchant_id, EXTRACT(HOUR FROM p.created_at) AS hour, COUNT(*) AS error_count
+FROM payments p
+JOIN top_error_merchants tem ON p.merchant_id = tem.merchant_id
+WHERE p.created_at >= NOW() - INTERVAL '3 months' AND p.status = 'ABORTED'
+GROUP BY p.merchant_id, EXTRACT(HOUR FROM p.created_at)
+ORDER BY p.merchant_id, hour;
+```
+
+### 패턴 2: 조건부 집계 (Conditional Aggregation)
+**인식 키워드**: "~별 성공/실패 건수", "상태별 비교"
+
+```sql
+SELECT
+    merchant_id,
+    COUNT(*) FILTER (WHERE status = 'DONE') AS success_count,
+    COUNT(*) FILTER (WHERE status = 'ABORTED') AS error_count
+FROM payments
+WHERE created_at >= NOW() - INTERVAL '3 months'
+GROUP BY merchant_id;
+```
+
+### 패턴 3: 비율/점유율 계산
+**인식 키워드**: "비율", "점유율", "퍼센트"
+
+```sql
+SELECT
+    merchant_id,
+    COUNT(*) AS count,
+    ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS percentage
+FROM payments
+GROUP BY merchant_id
+ORDER BY percentage DESC;
+```
+
+### 패턴 인식 규칙 요약
+| 키워드 조합 | 사용할 패턴 |
+|------------|-----------|
+| "상위/하위 N개" + "~별 집계" | 패턴 1 (CTE 필수) |
+| "상위/하위 N개" 단독 | 단순 ORDER BY + LIMIT |
+| "성공/실패 동시 집계" | 패턴 2 (FILTER) |
+| "비율/점유율" | 패턴 3 (윈도우 함수) |
 """)
 
         # 스키마 정보

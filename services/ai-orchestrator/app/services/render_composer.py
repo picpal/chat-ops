@@ -176,18 +176,28 @@ class RenderComposerService:
         """
         msg = message.lower()
 
+        # 디버그 로깅 추가 (TC-001-1, TC-002)
+        logger.info(f"[RenderDetect] message='{msg[:100]}...' (len={len(msg)})")
+
         # 1순위: 표/테이블 요청 (부정 표현 "그래프 말고 표로" 처리를 위해 먼저 체크)
         if any(kw in msg for kw in TABLE_KEYWORDS):
+            matched = [kw for kw in TABLE_KEYWORDS if kw in msg]
+            logger.info(f"[RenderDetect] TABLE matched: {matched}")
             return "table"
 
         # 2순위: 차트/그래프 요청 (단독 키워드 포함)
         if any(kw in msg for kw in CHART_KEYWORDS):
+            matched = [kw for kw in CHART_KEYWORDS if kw in msg]
+            logger.info(f"[RenderDetect] CHART matched: {matched}")
             return "chart"
 
         # 3순위: 텍스트 요청
         if any(kw in msg for kw in TEXT_KEYWORDS):
+            matched = [kw for kw in TEXT_KEYWORDS if kw in msg]
+            logger.info(f"[RenderDetect] TEXT matched: {matched}")
             return "text"
 
+        logger.info("[RenderDetect] No explicit render type detected")
         return None
 
     def compose(
@@ -240,6 +250,8 @@ class RenderComposerService:
         operation = query_plan.get("operation", "list")
         entity = query_plan.get("entity", "Order")
 
+        # TC-002: 집계 쿼리도 기본적으로 테이블로 렌더링
+        # 차트는 명시적 키워드("그래프", "차트")가 있을 때만 사용
         if operation == "aggregate":
             return self._compose_aggregate_spec(query_result, query_plan, user_message)
         elif operation == "search":
@@ -430,7 +442,8 @@ class RenderComposerService:
     def _identify_multi_series_axis(
         self,
         group_by: List[str],
-        user_message: str
+        user_message: str,
+        rows: Optional[List[Dict[str, Any]]] = None
     ) -> tuple:
         """
         다중 groupBy에서 멀티 시리즈 차트 축 식별
@@ -442,6 +455,7 @@ class RenderComposerService:
         Args:
             group_by: groupBy 필드 리스트
             user_message: 사용자 메시지 (추이/트렌드 키워드 감지용)
+            rows: SQL 결과 데이터 (groupBy가 비어있을 때 fallback으로 사용)
 
         Returns:
             (x_axis_key, series_key, is_multi_series) 튜플
@@ -449,33 +463,56 @@ class RenderComposerService:
             - series_key: 시리즈 분리에 사용할 필드 (카테고리)
             - is_multi_series: 멀티 시리즈 여부
         """
-        if len(group_by) < 2:
+        # TC-013: 입력값 로깅 추가
+        logger.info(
+            f"[MultiSeries] Input: groupBy={group_by}, "
+            f"user_message='{user_message[:50]}...', rows_count={len(rows) if rows else 0}"
+        )
+
+        # TC-013: groupBy가 비어있으면 SQL 결과 컬럼에서 추출 (fallback)
+        effective_group_by = list(group_by) if group_by else []
+        if not effective_group_by and rows and len(rows) > 0:
+            first_row = rows[0]
+            # SQL 결과에서 DATE_FIELDS, CATEGORY_FIELDS에 해당하는 컬럼 추출
+            for key in first_row.keys():
+                if key in DATE_FIELDS or key in CATEGORY_FIELDS:
+                    effective_group_by.append(key)
+            logger.info(f"[MultiSeries] Fallback groupBy from SQL columns: {effective_group_by}")
+
+        if len(effective_group_by) < 2:
+            logger.info(f"[MultiSeries] Not enough groupBy fields: {len(effective_group_by)}")
             return (None, None, False)
 
         # groupBy에서 시계열/카테고리 필드 분리
-        date_fields = [f for f in group_by if f in DATE_FIELDS]
-        category_fields = [f for f in group_by if f in CATEGORY_FIELDS]
+        date_fields = [f for f in effective_group_by if f in DATE_FIELDS]
+        category_fields = [f for f in effective_group_by if f in CATEGORY_FIELDS]
 
         # 추이/트렌드 키워드 감지
         trend_keywords = CHART_TYPE_KEYWORDS.get("line", [])
         message_lower = user_message.lower()
         has_trend = any(kw in message_lower for kw in trend_keywords)
 
+        # TC-013: "가맹점별", "상태별" 등의 "별" 패턴 감지
+        has_multi_pattern = "별" in message_lower
+
         logger.info(
-            f"[MultiSeries] groupBy={group_by}, "
+            f"[MultiSeries] Analysis: "
             f"dateFields={date_fields}, categoryFields={category_fields}, "
-            f"has_trend={has_trend}"
+            f"has_trend={has_trend}, has_multi_pattern={has_multi_pattern}"
         )
 
-        # 카테고리 + 시계열 + 추이 키워드 → 멀티 시리즈
-        if category_fields and date_fields and has_trend:
+        # TC-013: 멀티 시리즈 조건 완화
+        # 카테고리 + 시계열 + (추이 키워드 OR "별" 패턴) → 멀티 시리즈
+        if category_fields and date_fields and (has_trend or has_multi_pattern):
             x_axis_key = date_fields[0]  # 시계열을 X축으로
             series_key = category_fields[0]  # 카테고리를 시리즈로
             logger.info(
-                f"[MultiSeries] Detected! x_axis={x_axis_key}, series={series_key}"
+                f"[MultiSeries] Detected! x_axis={x_axis_key}, series={series_key}, "
+                f"trigger={'trend_keyword' if has_trend else 'multi_pattern(별)'}"
             )
             return (x_axis_key, series_key, True)
 
+        logger.info("[MultiSeries] Not detected (conditions not met)")
         return (None, None, False)
 
     def _pivot_data_for_multi_series(
@@ -682,8 +719,9 @@ class RenderComposerService:
             y_axis_key = first_agg.get("alias") or f"{first_agg['function']}_{first_agg['field']}"
 
         # 멀티 시리즈 감지 (다중 groupBy + 추이 키워드)
+        # TC-013: rows 전달하여 groupBy 없을 때 SQL 결과에서 fallback 추출
         ms_x_axis, ms_series_key, is_multi_series = self._identify_multi_series_axis(
-            group_by, user_message
+            group_by, user_message, rows
         )
 
         # 멀티 시리즈인 경우 데이터 피벗
@@ -938,10 +976,18 @@ class RenderComposerService:
             alias = agg.get("alias") or f"{func}_{field}"
             display_label = self._get_axis_label(alias)
 
-            # 금액 관련 필드는 currency 타입
-            is_currency = field in ("amount", "totalAmount", "netAmount", "fee") or \
-                          any(kw in alias.lower() for kw in ("amount", "fee", "total"))
-            col_type = "currency" if is_currency else "number"
+            # metricType 우선 사용, 없으면 기존 키워드 매칭 (fallback)
+            metric_type = agg.get("metricType")
+            if metric_type:
+                # metricType → col_type 매핑
+                col_type = "currency" if metric_type == "currency" else "number"
+                logger.info(f"[BuildColumns] alias={alias}, metricType={metric_type} → col_type={col_type}")
+            else:
+                # Fallback: 기존 키워드 매칭
+                is_currency = field in ("amount", "totalAmount", "netAmount", "fee") or \
+                              any(kw in alias.lower() for kw in ("amount", "fee", "total"))
+                col_type = "currency" if is_currency else "number"
+                logger.info(f"[BuildColumns] alias={alias}, fallback keyword matching → col_type={col_type}")
 
             columns.append({
                 "key": alias,
