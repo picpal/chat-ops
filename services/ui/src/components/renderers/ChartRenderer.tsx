@@ -134,6 +134,33 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
     return { total, max, avg, count: chartData.length }
   }, [chartData, primaryYAxisKey])
 
+  // Calculate Y-axis domain max with 15% padding for all series
+  const yAxisMax = useMemo(() => {
+    if (chartConfig.chartType === 'pie' || chartData.length === 0) return undefined
+
+    // 모든 시리즈의 dataKey 수집
+    const dataKeys: string[] = chartConfig.series?.length
+      ? chartConfig.series.map(s => s.dataKey)
+      : [chartConfig.yAxis?.dataKey || 'value']
+
+    // 전체 최대값 계산
+    let maxValue = 0
+    for (const dataKey of dataKeys) {
+      for (const item of chartData) {
+        const val = item[dataKey]
+        const numVal = typeof val === 'string' ? parseFloat(val) : (typeof val === 'number' ? val : NaN)
+        if (!isNaN(numVal) && numVal > maxValue) {
+          maxValue = numVal
+        }
+      }
+    }
+
+    if (maxValue === 0) return undefined
+
+    // 15% 여백 추가
+    return Math.ceil(maxValue * 1.15)
+  }, [chartData, chartConfig.chartType, chartConfig.series, chartConfig.yAxis?.dataKey])
+
   const handleFullscreen = () => {
     openModal('chartDetail', { spec, data, chartData, stats })
   }
@@ -244,6 +271,7 @@ const ChartRenderer: React.FC<ChartRendererProps> = ({ spec, data }) => {
         stroke="#94a3b8"
         tickFormatter={(value) => formatCompactNumber(value)}
         width={70}
+        domain={[0, yAxisMax || 'auto']}
       >
         {yAxis?.label && (
           <Label value={yAxis.label} angle={-90} position="insideLeft" dx={-15} style={{ fontSize: 12, fill: '#64748b', textAnchor: 'middle' }} />

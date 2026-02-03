@@ -113,6 +113,32 @@ const ChartDetailModal: React.FC = () => {
     return { total, max, avg, count: chartData.length }
   }, [chartData, spec])
 
+  // Calculate Y-axis domain max with 15% padding for all series
+  const yAxisMax = React.useMemo(() => {
+    if (!spec || chartData.length === 0) return undefined
+
+    const chartConfig = spec.chart
+    if (chartConfig.chartType === 'pie') return undefined
+
+    const dataKeys: string[] = chartConfig.series?.length
+      ? chartConfig.series.map(s => s.dataKey)
+      : [chartConfig.yAxis?.dataKey || 'value']
+
+    let maxValue = 0
+    for (const dataKey of dataKeys) {
+      for (const item of chartData) {
+        const val = item[dataKey]
+        const numVal = typeof val === 'string' ? parseFloat(val) : (typeof val === 'number' ? val : NaN)
+        if (!isNaN(numVal) && numVal > maxValue) {
+          maxValue = numVal
+        }
+      }
+    }
+
+    if (maxValue === 0) return undefined
+    return Math.ceil(maxValue * 1.15)
+  }, [chartData, spec])
+
   // ESC key handler
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -188,6 +214,7 @@ const ChartDetailModal: React.FC = () => {
         stroke="#94a3b8"
         tickFormatter={(value) => formatCompactNumber(value)}
         width={70}
+        domain={[0, yAxisMax || 'auto']}
       >
         {yAxis?.label && (
           <Label value={yAxis.label} angle={-90} position="insideLeft" dx={-15} style={{ fontSize: 12, fill: '#64748b', textAnchor: 'middle' }} />
