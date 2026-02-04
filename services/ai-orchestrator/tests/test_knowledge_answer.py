@@ -259,6 +259,32 @@ class TestKnowledgeAnswerWithDocuments:
             use_dynamic_params=False
         )
 
+    def test_knowledge_answer_ai_message_is_brief_summary(
+        self, client, mock_query_planner_knowledge,
+        mock_rag_with_documents, mock_llm_response, mock_core_api
+    ):
+        """
+        시나리오: knowledge_answer 응답의 ai_message가 짧은 요약인지 확인
+        기대: ai_message는 "질문에 대한 답변입니다." 고정 문구
+              (상세 내용은 renderSpec.text.content에만 포함)
+        """
+        response = client.post("/api/v1/chat", json={
+            "message": "부분취소 프로세스 알려줘",
+            "conversationHistory": []
+        })
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # 검증 1: ai_message가 짧은 요약 문구
+        assert data["aiMessage"] == "질문에 대한 답변입니다."
+
+        # 검증 2: 상세 내용은 renderSpec.text.content에 포함
+        assert "부분취소" in data["renderSpec"]["text"]["content"]
+
+        # 검증 3: ai_message와 renderSpec.text.content가 다름 (중복 방지)
+        assert data["aiMessage"] != data["renderSpec"]["text"]["content"]
+
 
 # ============================================
 # 테스트 3: RAG 문서가 없을 때 안내 메시지 반환
