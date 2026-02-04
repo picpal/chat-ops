@@ -145,10 +145,11 @@ export const documentsApi = {
     if (data.status) formData.append('status', data.status)
     if (data.submitted_by) formData.append('submitted_by', data.submitted_by)
 
-    // axios가 FormData를 감지하면 자동으로 Content-Type과 boundary를 설정
+    // Content-Type을 undefined로 설정하여 axios가 자동으로 multipart/form-data와 boundary 설정
     const response = await aiClient.post<DocumentResponse>(
       `${BASE_PATH}/upload`,
-      formData
+      formData,
+      { headers: { 'Content-Type': undefined } }
     )
     return response.data
   },

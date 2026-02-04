@@ -767,8 +767,9 @@ class RAGService:
                     logger.warning(f"Failed to regenerate embedding: {e}")
 
         if metadata is not None:
+            import json
             updates.append("metadata = %s")
-            params.append(metadata)
+            params.append(json.dumps(metadata))
 
         if not updates:
             return existing

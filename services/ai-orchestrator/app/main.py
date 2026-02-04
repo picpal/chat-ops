@@ -1,7 +1,9 @@
 import os
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
 from app.api.v1 import chat, documents, ratings
@@ -29,6 +31,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+logger = logging.getLogger(__name__)
+
+# Validation error handler for debugging
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.error(f"Validation error on {request.url}: {exc.errors()}")
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()}
+    )
 
 # Include routers
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
