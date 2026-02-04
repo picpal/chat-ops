@@ -1,9 +1,9 @@
 /**
  * 문서 생성/수정 폼 모달 컴포넌트
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useDocumentStore } from '@/store/documentStore'
-import { useDocument, useCreateDocument, useUpdateDocument } from '@/hooks/useDocuments'
+import { useDocument, useCreateDocument, useUpdateDocument, useUploadDocument } from '@/hooks/useDocuments'
 import { DocType, DocumentStatus, DOC_TYPE_LABELS } from '@/types/document'
 
 export function DocumentForm() {
@@ -13,6 +13,7 @@ export function DocumentForm() {
   const { data: fullDocument } = useDocument(isEdit && selectedDocument ? selectedDocument.id : null)
   const createMutation = useCreateDocument()
   const updateMutation = useUpdateDocument()
+  const uploadMutation = useUploadDocument()
 
   const [formData, setFormData] = useState({
     doc_type: 'entity' as DocType,
@@ -26,6 +27,11 @@ export function DocumentForm() {
   })
 
   const [errors, setErrors] = useState<Record<string, string>>({})
+
+  // 파일 업로드 관련 상태
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [dragActive, setDragActive] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // 수정 모드일 때 데이터 로드
   useEffect(() => {
@@ -43,15 +49,55 @@ export function DocumentForm() {
     }
   }, [isEdit, fullDocument])
 
+  const validateAndSetFile = (file: File) => {
+    const ext = file.name.split('.').pop()?.toLowerCase()
+    if (!['md', 'txt', 'pdf'].includes(ext || '')) {
+      setErrors((prev) => ({ ...prev, file: '지원하지 않는 파일 형식입니다. (md, txt, pdf만 가능)' }))
+      return
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setErrors((prev) => ({ ...prev, file: '파일 크기가 10MB를 초과합니다.' }))
+      return
+    }
+    setSelectedFile(file)
+    setErrors((prev) => ({ ...prev, file: '' }))
+    // 제목 자동 설정 (확장자 제외한 파일명)
+    if (!formData.title) {
+      setFormData((prev) => ({ ...prev, title: file.name.replace(/\.[^/.]+$/, '') }))
+    }
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragActive(false)
+    const file = e.dataTransfer?.files[0]
+    if (file) validateAndSetFile(file)
+  }
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return bytes + ' B'
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+  }
+
   const validate = () => {
     const newErrors: Record<string, string> = {}
 
     if (!formData.title.trim()) {
       newErrors.title = '제목을 입력해주세요.'
     }
-    if (!formData.content.trim()) {
-      newErrors.content = '내용을 입력해주세요.'
+
+    // 생성 모드에서는 파일 검증, 수정 모드에서는 content 검증
+    if (isEdit) {
+      if (!formData.content.trim()) {
+        newErrors.content = '내용을 입력해주세요.'
+      }
+    } else {
+      if (!selectedFile) {
+        newErrors.file = '파일을 선택해주세요.'
+      }
     }
+
     try {
       JSON.parse(formData.metadata)
     } catch {
@@ -87,12 +133,12 @@ export function DocumentForm() {
           },
         })
         alert('문서가 수정되었습니다.')
-      } else {
-        await createMutation.mutateAsync({
+      } else if (selectedFile) {
+        // 파일 업로드로 문서 생성
+        await uploadMutation.mutateAsync({
+          file: selectedFile,
           doc_type: formData.doc_type,
-          title: formData.title,
-          content: formData.content,
-          metadata,
+          title: formData.title || undefined,
           status: formData.status,
           submitted_by: formData.submitted_by || undefined,
           skip_embedding: formData.skip_embedding,
@@ -105,7 +151,7 @@ export function DocumentForm() {
     }
   }
 
-  const isPending = createMutation.isPending || updateMutation.isPending
+  const isPending = createMutation.isPending || updateMutation.isPending || uploadMutation.isPending
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto">
@@ -170,22 +216,112 @@ export function DocumentForm() {
                 {errors.title && <p className="mt-1 text-sm text-red-500">{errors.title}</p>}
               </div>
 
-              {/* 내용 */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  내용 <span className="text-red-500">*</span>
-                </label>
-                <textarea
-                  value={formData.content}
-                  onChange={(e) => setFormData({ ...formData, content: e.target.value })}
-                  placeholder="문서 내용을 입력하세요"
-                  rows={8}
-                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
-                    errors.content ? 'border-red-500' : 'border-gray-300'
-                  }`}
-                />
-                {errors.content && <p className="mt-1 text-sm text-red-500">{errors.content}</p>}
-              </div>
+              {/* 파일 업로드 영역 (생성 모드에서만) */}
+              {!isEdit && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    파일 업로드 <span className="text-red-500">*</span>
+                  </label>
+                  <div
+                    onDrop={handleDrop}
+                    onDragOver={(e) => {
+                      e.preventDefault()
+                      setDragActive(true)
+                    }}
+                    onDragLeave={() => setDragActive(false)}
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors
+                      ${dragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'}
+                      ${errors.file ? 'border-red-500' : ''}
+                    `}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".md,.txt,.pdf"
+                      onChange={(e) => e.target.files?.[0] && validateAndSetFile(e.target.files[0])}
+                      className="hidden"
+                    />
+                    <svg
+                      className="mx-auto h-12 w-12 text-gray-400"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={1.5}
+                        d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                      />
+                    </svg>
+                    <p className="mt-2 text-sm text-gray-600">
+                      파일을 여기에 드래그하거나 클릭하여 선택
+                    </p>
+                    <p className="mt-1 text-xs text-gray-500">지원 형식: .md, .txt, .pdf (최대 10MB)</p>
+                  </div>
+                  {errors.file && <p className="mt-1 text-sm text-red-500">{errors.file}</p>}
+
+                  {/* 선택된 파일 정보 */}
+                  {selectedFile && (
+                    <div className="mt-3 flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                      <svg
+                        className="h-8 w-8 text-blue-500"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={1.5}
+                          d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                        />
+                      </svg>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">{selectedFile.name}</p>
+                        <p className="text-xs text-gray-500">{formatFileSize(selectedFile.size)}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedFile(null)
+                        }}
+                        className="text-gray-400 hover:text-gray-500"
+                      >
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M6 18L18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 내용 (수정 모드에서만) */}
+              {isEdit && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    내용 <span className="text-red-500">*</span>
+                  </label>
+                  <textarea
+                    value={formData.content}
+                    onChange={(e) => setFormData({ ...formData, content: e.target.value })}
+                    placeholder="문서 내용을 입력하세요"
+                    rows={8}
+                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+                      errors.content ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                  />
+                  {errors.content && <p className="mt-1 text-sm text-red-500">{errors.content}</p>}
+                </div>
+              )}
 
               {/* 메타데이터 */}
               <div>

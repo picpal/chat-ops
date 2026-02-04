@@ -158,3 +158,13 @@ export const STATUS_COLORS: Record<DocumentStatus, string> = {
   active: 'green',
   rejected: 'red',
 }
+
+// 파일 업로드용 타입 추가
+export interface DocumentUploadData {
+  file: File
+  doc_type: DocType
+  title?: string
+  skip_embedding?: boolean
+  status?: DocumentStatus
+  submitted_by?: string
+}

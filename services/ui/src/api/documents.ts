@@ -14,6 +14,7 @@ import {
   BulkOperationResult,
   EmbeddingRefreshRequest,
   EmbeddingRefreshResult,
+  DocumentUploadData,
 } from '@/types/document'
 
 const BASE_PATH = '/api/v1/documents'
@@ -129,6 +130,26 @@ export const documentsApi = {
    */
   refreshEmbeddings: async (data: EmbeddingRefreshRequest = {}): Promise<EmbeddingRefreshResult> => {
     const response = await aiClient.post<EmbeddingRefreshResult>(`${BASE_PATH}/embeddings/refresh`, data)
+    return response.data
+  },
+
+  /**
+   * 파일 업로드로 문서 생성
+   */
+  uploadDocument: async (data: DocumentUploadData): Promise<DocumentResponse> => {
+    const formData = new FormData()
+    formData.append('file', data.file)
+    formData.append('doc_type', data.doc_type)
+    if (data.title) formData.append('title', data.title)
+    if (data.skip_embedding) formData.append('skip_embedding', 'true')
+    if (data.status) formData.append('status', data.status)
+    if (data.submitted_by) formData.append('submitted_by', data.submitted_by)
+
+    // axios가 FormData를 감지하면 자동으로 Content-Type과 boundary를 설정
+    const response = await aiClient.post<DocumentResponse>(
+      `${BASE_PATH}/upload`,
+      formData
+    )
     return response.data
   },
 }
