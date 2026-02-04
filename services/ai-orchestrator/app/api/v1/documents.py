@@ -5,9 +5,10 @@ RAG 문서 관리 API 엔드포인트
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Response, UploadFile, File, Form
 
 from app.services.rag_service import get_rag_service
+from app.services.file_parser import FileParser
 from app.models.document import (
     DocType,
     DocumentStatus,
@@ -239,6 +240,89 @@ async def create_document(request: DocumentCreate):
             metadata=request.metadata,
             status=status,
             submitted_by=request.submitted_by
+        )
+
+    # 생성된 문서 조회하여 반환
+    doc = await rag_service.get_document(doc_id)
+
+    if not doc:
+        raise HTTPException(status_code=500, detail="Failed to retrieve created document")
+
+    return DocumentResponse(
+        id=doc.id,
+        doc_type=doc.doc_type,
+        title=doc.title,
+        content=doc.content,
+        metadata=doc.metadata,
+        status=doc.status,
+        has_embedding=doc.has_embedding,
+        submitted_by=doc.submitted_by,
+        submitted_at=doc.submitted_at,
+        reviewed_by=doc.reviewed_by,
+        reviewed_at=doc.reviewed_at,
+        rejection_reason=doc.rejection_reason,
+        created_at=doc.created_at,
+        updated_at=doc.updated_at
+    )
+
+
+@router.post("/upload", response_model=DocumentResponse, status_code=201)
+async def upload_document(
+    file: UploadFile = File(..., description="업로드할 문서 파일 (.md, .txt, .pdf)"),
+    doc_type: DocType = Form(..., description="문서 타입"),
+    title: Optional[str] = Form(None, description="문서 제목 (미입력시 파일명 사용)"),
+    skip_embedding: bool = Form(False, description="임베딩 생성 건너뛰기"),
+    status: Optional[DocumentStatus] = Form(None, description="문서 상태"),
+    submitted_by: Optional[str] = Form(None, description="제출자")
+):
+    """
+    파일을 업로드하여 RAG 문서 생성
+
+    지원 형식: .md, .txt, .pdf
+    최대 크기: 10MB
+    """
+    logger.info(f"Upload document: {file.filename}, doc_type={doc_type}")
+
+    # 1. 파일 파싱
+    parsed_title, content = await FileParser.parse(file)
+
+    # 2. 제목 결정 (입력값 우선, 없으면 파일명)
+    final_title = title or parsed_title
+
+    # 3. 상태 결정
+    final_status = status.value if status else "pending"
+
+    # 4. 문서 저장
+    rag_service = get_rag_service()
+
+    if skip_embedding:
+        # 임베딩 없이 추가
+        import psycopg
+        from pgvector.psycopg import register_vector
+
+        conn = psycopg.connect(rag_service.database_url)
+        register_vector(conn)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO documents (doc_type, title, content, metadata, status, submitted_by, submitted_at)
+                VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                RETURNING id
+                """,
+                (doc_type.value, final_title, content, {"original_filename": file.filename}, final_status, submitted_by)
+            )
+            doc_id = cur.fetchone()[0]
+            conn.commit()
+        conn.close()
+    else:
+        doc_id = await rag_service.add_document(
+            doc_type=doc_type.value,
+            title=final_title,
+            content=content,
+            metadata={"original_filename": file.filename},
+            status=final_status,
+            submitted_by=submitted_by
         )
 
     # 생성된 문서 조회하여 반환

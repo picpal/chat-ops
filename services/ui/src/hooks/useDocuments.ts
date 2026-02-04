@@ -10,6 +10,7 @@ import {
   DocumentReviewRequest,
   BulkReviewRequest,
   EmbeddingRefreshRequest,
+  DocumentUploadData,
 } from '@/types/document'
 
 // Query Keys
@@ -72,6 +73,20 @@ export function useCreateDocument() {
 
   return useMutation({
     mutationFn: (data: DocumentCreateRequest) => documentsApi.createDocument(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: documentKeys.all })
+    },
+  })
+}
+
+/**
+ * 파일 업로드로 문서 생성 mutation
+ */
+export function useUploadDocument() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: DocumentUploadData) => documentsApi.uploadDocument(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: documentKeys.all })
     },
