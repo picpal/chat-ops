@@ -221,6 +221,13 @@ export function formatAggregationResultMarkdown(
 ): string {
   const lines: string[] = []
 
+  // 제목 추가
+  lines.push('## 집계 결과\n')
+
+  // 마크다운 테이블 헤더
+  lines.push('| 항목 | 값 |')
+  lines.push('|------|------|')
+
   for (const agg of aggregations) {
     const alias = agg.alias || `${agg.function}_${agg.field}`
     const value = result[alias]
@@ -249,9 +256,10 @@ export function formatAggregationResultMarkdown(
         formattedValue = value.toLocaleString()
       }
 
-      lines.push(`**${label}**: ${formattedValue}`)
+      // 테이블 행 추가
+      lines.push(`| ${label} | ${formattedValue} |`)
     }
   }
 
-  return lines.join('\n\n')
+  return lines.join('\n')
 }

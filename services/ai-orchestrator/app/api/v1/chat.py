@@ -608,7 +608,7 @@ async def _handle_knowledge_answer(
                     "references": references
                 }
             },
-            ai_message=answer_text,
+            ai_message="질문에 대한 답변입니다.",
             timestamp=datetime.utcnow().isoformat() + "Z"
         )
 
@@ -1219,10 +1219,22 @@ async def handle_text_to_sql(
                 # 직접 계산 실패 시 기존 SQL 생성 로직으로 fallback
                 logger.info(f"[{request_id}] Direct calculation failed, falling back to SQL generation")
 
+        # ========================================
+        # Phase 1.5: 집계 요청 + 기간 없음 clarification
+        # ========================================
+        # 참조 표현 먼저 감지 (새 대화인지 확인용)
+        is_refinement, ref_type = detect_reference_expression(request.message)
+
+        # 집계 요청인데 기간이 없으면 clarification 반환
+        clarification_response = _check_aggregate_without_timerange_for_text_to_sql(
+            enhanced_message, is_refinement, request_id
+        )
+        if clarification_response:
+            return clarification_response
+
         text_to_sql = get_text_to_sql_service()
 
-        # 참조 표현 감지 (연속 대화 WHERE 조건 병합용)
-        is_refinement, ref_type = detect_reference_expression(request.message)
+        # 참조 표현 감지 (연속 대화 WHERE 조건 병합용) - 위에서 이미 감지함
         if is_refinement:
             logger.info(f"[{request_id}] Reference expression detected (type: {ref_type}), will preserve previous WHERE conditions")
 
@@ -1537,3 +1549,87 @@ async def _perform_direct_calculation(
     except Exception as e:
         logger.error(f"[{request_id}] Direct calculation error: {e}", exc_info=True)
         return None
+
+
+# ============================================
+# 집계 요청 + 기간 없음 clarification 체크
+# ============================================
+
+# 집계성 키워드 (clarification 필요 판단용)
+AGGREGATE_KEYWORDS = ["추이", "추세", "합계", "평균", "통계", "현황", "분석", "트렌드", "변화"]
+
+# 명시적 기간 표현 패턴
+EXPLICIT_TIME_PATTERNS = [
+    r"최근\s*\d+\s*[일주월년개]",      # 최근 3개월, 최근 2주
+    r"지난\s*\d+\s*[일주월년개]",      # 지난 1달
+    r"\d{4}년",                        # 2024년
+    r"\d{1,2}월",                      # 3월, 12월
+    r"오늘|어제|그제",
+    r"이번\s*주|지난\s*주|이번\s*달|지난\s*달",
+    r"올해|작년|내년",
+]
+
+
+def _check_aggregate_without_timerange_for_text_to_sql(
+    message: str,
+    is_refinement: bool,
+    request_id: str
+) -> Optional[ChatResponse]:
+    """
+    Text-to-SQL 모드에서 집계 요청 + 기간 없음 체크
+
+    세 가지 조건 모두 충족 시 clarification 응답 반환:
+    1. 새 대화 (참조 표현 없음)
+    2. 집계성 키워드 포함 (추이, 추세, 합계, 평균, 통계 등)
+    3. 명시적 기간 표현 없음
+
+    Returns:
+        ChatResponse with clarification if needed, None otherwise
+    """
+    # 조건 1: 새 대화인지 확인 (참조 표현이 있으면 기존 대화 이어가기)
+    if is_refinement:
+        return None
+
+    # 조건 2: 집계 요청인지 확인
+    message_lower = message.lower()
+    is_aggregate_request = any(kw in message_lower for kw in AGGREGATE_KEYWORDS)
+    if not is_aggregate_request:
+        return None
+
+    # 조건 3: 명시적 기간 표현이 있는지 확인
+    has_explicit_time = any(
+        re.search(pattern, message) for pattern in EXPLICIT_TIME_PATTERNS
+    )
+    if has_explicit_time:
+        return None
+
+    # 세 조건 모두 충족: clarification 응답 반환
+    logger.info(f"[{request_id}] Aggregate request without timerange detected - returning clarification")
+
+    # UI ClarificationRenderSpec 구조에 맞춤:
+    # { type: "clarification", clarification: { question: string, options: string[] }, metadata: { originalQuestion: string } }
+    # metadata.originalQuestion: 옵션 선택 시 원래 질문과 합쳐서 조회하기 위함
+    return ChatResponse(
+        request_id=request_id,
+        render_spec={
+            "type": "clarification",
+            "clarification": {
+                "question": "조회 기간을 선택해주세요",
+                "options": ["최근 1개월", "최근 3개월", "최근 6개월", "최근 1년"]
+            },
+            "metadata": {
+                "originalQuestion": message,
+                "clarificationType": "timerange_selection"
+            }
+        },
+        query_result=None,
+        query_plan={
+            "needs_clarification": True,
+            "clarification_question": "조회 기간을 선택해주세요",
+            "clarification_options": ["최근 1개월", "최근 3개월", "최근 6개월", "최근 1년"],
+            "original_question": message,
+            "mode": "text_to_sql"
+        },
+        ai_message="집계/추이 데이터를 조회하려면 기간 범위가 필요합니다. 원하시는 기간을 선택해주세요.",
+        timestamp=datetime.utcnow().isoformat() + "Z"
+    )
