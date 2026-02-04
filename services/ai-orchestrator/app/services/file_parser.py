@@ -32,7 +32,10 @@ class FileParser:
         if ext == '.pdf':
             content = FileParser._parse_pdf(content_bytes)
         else:
-            content = content_bytes.decode('utf-8')
+            try:
+                content = content_bytes.decode('utf-8')
+            except UnicodeDecodeError:
+                raise HTTPException(400, "파일 인코딩 오류: UTF-8 형식이 아닙니다.")
 
         return title, content
 
@@ -40,10 +43,16 @@ class FileParser:
     def _parse_pdf(content_bytes: bytes) -> str:
         """PDF 파일에서 텍스트 추출"""
         from pypdf import PdfReader
+        from pypdf.errors import PdfReadError
         from io import BytesIO
 
-        reader = PdfReader(BytesIO(content_bytes))
-        text_parts = []
-        for page in reader.pages:
-            text_parts.append(page.extract_text() or '')
-        return '\n\n'.join(text_parts)
+        try:
+            reader = PdfReader(BytesIO(content_bytes))
+            text_parts = []
+            for page in reader.pages:
+                text_parts.append(page.extract_text() or '')
+            return '\n\n'.join(text_parts)
+        except PdfReadError as e:
+            raise HTTPException(400, f"PDF 파일 읽기 오류: {str(e)}")
+        except Exception as e:
+            raise HTTPException(400, f"PDF 파싱 오류: {str(e)}")

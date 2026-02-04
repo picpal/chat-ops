@@ -213,25 +213,15 @@ async def create_document(request: DocumentCreate):
 
     # add_document는 status, submitted_by 파라미터 지원
     if request.skip_embedding:
-        # 임베딩 없이 추가
-        import psycopg
-        from pgvector.psycopg import register_vector
-
-        conn = psycopg.connect(rag_service.database_url)
-        register_vector(conn)
-
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO documents (doc_type, title, content, metadata, status, submitted_by, submitted_at)
-                VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-                RETURNING id
-                """,
-                (request.doc_type.value, request.title, request.content, request.metadata or {}, status, request.submitted_by)
-            )
-            doc_id = cur.fetchone()[0]
-            conn.commit()
-        conn.close()
+        # 임베딩 없이 추가 (서비스 메서드 사용)
+        doc_id = await rag_service.add_document_without_embedding(
+            doc_type=request.doc_type.value,
+            title=request.title,
+            content=request.content,
+            metadata=request.metadata,
+            status=status,
+            submitted_by=request.submitted_by
+        )
     else:
         doc_id = await rag_service.add_document(
             doc_type=request.doc_type.value,
@@ -284,7 +274,13 @@ async def upload_document(
     logger.info(f"Upload document: {file.filename}, doc_type={doc_type}")
 
     # 1. 파일 파싱
-    parsed_title, content = await FileParser.parse(file)
+    try:
+        parsed_title, content = await FileParser.parse(file)
+    except HTTPException:
+        raise  # FileParser에서 발생한 HTTP 에러는 그대로 전달
+    except Exception as e:
+        logger.error(f"File parsing failed: {e}")
+        raise HTTPException(status_code=422, detail=f"파일 파싱 실패: {str(e)}")
 
     # 2. 제목 결정 (입력값 우선, 없으면 파일명)
     final_title = title or parsed_title
@@ -296,25 +292,15 @@ async def upload_document(
     rag_service = get_rag_service()
 
     if skip_embedding:
-        # 임베딩 없이 추가
-        import psycopg
-        from pgvector.psycopg import register_vector
-
-        conn = psycopg.connect(rag_service.database_url)
-        register_vector(conn)
-
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO documents (doc_type, title, content, metadata, status, submitted_by, submitted_at)
-                VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-                RETURNING id
-                """,
-                (doc_type.value, final_title, content, {"original_filename": file.filename}, final_status, submitted_by)
-            )
-            doc_id = cur.fetchone()[0]
-            conn.commit()
-        conn.close()
+        # 임베딩 없이 추가 (서비스 메서드 사용)
+        doc_id = await rag_service.add_document_without_embedding(
+            doc_type=doc_type.value,
+            title=final_title,
+            content=content,
+            metadata={"original_filename": file.filename},
+            status=final_status,
+            submitted_by=submitted_by
+        )
     else:
         doc_id = await rag_service.add_document(
             doc_type=doc_type.value,

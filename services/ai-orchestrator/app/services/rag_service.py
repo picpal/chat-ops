@@ -361,6 +361,50 @@ class RAGService:
 
         return documents
 
+    async def add_document_without_embedding(
+        self,
+        doc_type: str,
+        title: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        status: str = "pending",
+        submitted_by: Optional[str] = None
+    ) -> int:
+        """
+        임베딩 없이 문서 추가 (skip_embedding=True용)
+
+        Args:
+            doc_type: 문서 타입 (entity, business_logic, error_code, faq)
+            title: 문서 제목
+            content: 문서 내용
+            metadata: 추가 메타데이터
+            status: 문서 상태 (기본: pending)
+            submitted_by: 제출자 ID/이름
+
+        Returns:
+            생성된 문서 ID
+        """
+        logger.info(f"Adding document without embedding: {title} (status={status})")
+
+        # metadata를 JSON 문자열로 변환
+        metadata_json = json.dumps(metadata or {})
+
+        with self._get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO documents (doc_type, title, content, metadata, status, submitted_by, submitted_at)
+                    VALUES (%s, %s, %s, %s::jsonb, %s, %s, CURRENT_TIMESTAMP)
+                    RETURNING id
+                    """,
+                    (doc_type, title, content, metadata_json, status, submitted_by)
+                )
+                doc_id = cur.fetchone()[0]
+                conn.commit()
+
+        logger.info(f"Document added without embedding with ID: {doc_id}")
+        return doc_id
+
     async def add_document(
         self,
         doc_type: str,

@@ -168,3 +168,38 @@ class TestFileParserEdgeCases:
         file = MockUploadFile("unicode.txt", content.encode('utf-8'))
         title, parsed_content = await FileParser.parse(file)
         assert parsed_content == content
+
+    @pytest.mark.asyncio
+    async def test_non_utf8_encoding_error(self):
+        """UTF-8이 아닌 인코딩 파일 에러 처리"""
+        # Latin-1 인코딩 바이트 (UTF-8로 디코딩 불가)
+        non_utf8_bytes = b'\xff\xfe\x00\x01'
+        file = MockUploadFile("invalid.txt", non_utf8_bytes)
+        with pytest.raises(HTTPException) as exc_info:
+            await FileParser.parse(file)
+        assert exc_info.value.status_code == 400
+        assert "UTF-8" in exc_info.value.detail
+
+
+class TestFileParserPdf:
+    """PDF 파싱 테스트"""
+
+    @pytest.mark.asyncio
+    async def test_parse_invalid_pdf(self):
+        """잘못된 PDF 파일 에러 처리"""
+        # PDF 헤더만 있고 내용이 없는 잘못된 PDF
+        invalid_pdf = b"%PDF-1.4"
+        file = MockUploadFile("invalid.pdf", invalid_pdf)
+        with pytest.raises(HTTPException) as exc_info:
+            await FileParser.parse(file)
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_parse_corrupted_pdf(self):
+        """손상된 PDF 파일 에러 처리"""
+        # 완전히 잘못된 바이트
+        corrupted = b"not a pdf file at all"
+        file = MockUploadFile("corrupted.pdf", corrupted)
+        with pytest.raises(HTTPException) as exc_info:
+            await FileParser.parse(file)
+        assert exc_info.value.status_code == 400
