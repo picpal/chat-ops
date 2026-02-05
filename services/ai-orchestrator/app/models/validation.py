@@ -16,6 +16,7 @@ class ValidationIssueType(str, Enum):
     MISSING_TIME_RANGE = "missing_time_range"      # 시계열 데이터에 timeRange 누락
     AMBIGUOUS_INTENT = "ambiguous_intent"          # 의도 불명확
     UNNECESSARY_CLARIFICATION = "unnecessary_clarification"  # 불필요한 clarification
+    MISSING_CLARIFICATION = "missing_clarification"  # 필요한 clarification 누락 (집계+기간없음)
     INVALID_OPERATOR = "invalid_operator"          # 잘못된 연산자
     FIELD_NOT_EXIST = "field_not_exist"            # 존재하지 않는 필드
     INVALID_ENTITY = "invalid_entity"              # 유효하지 않은 엔티티

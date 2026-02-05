@@ -854,6 +854,7 @@ clarification이 필요하면 "YES", 필요 없으면 "NO"만 응답하세요.
 
 ### 1. 도메인 용어 자동 매핑 (clarification 금지!)
 다음 단어가 포함되면 **무조건** 해당 엔티티로 처리하세요. **절대로 needs_clarification을 true로 설정하지 마세요!**
+**(유일한 예외: 섹션 2의 "집계+기간없음+new_query" 조건을 모두 충족하는 경우만)**
 
 | 사용자 표현 | 엔티티 | 예시 |
 |------------|--------|------|
@@ -866,6 +867,35 @@ clarification이 필요하면 "YES", 필요 없으면 "NO"만 응답하세요.
 **오직 다음 경우에만** needs_clarification=true:
 - "정보 보여줘", "데이터 조회해줘" (무엇을?)
 - 도메인 용어가 전혀 없는 모호한 요청
+- **집계 요청 + 기간 없음** (아래 3가지 조건을 **모두** 충족해야만 clarification):
+  1. query_intent가 "new_query" (최초 질문 또는 새 주제) - filter_local/aggregate_local이면 ❌
+  2. 집계성 키워드 포함: "추이", "추세", "합계", "평균", "통계", "현황", "분석"
+  3. 명시적 기간 표현 없음 ("최근 N일/주/월", "지난 N일", "이번 달" 등 없음)
+  **→ 3가지 중 하나라도 미충족이면 clarification 금지!**
+
+**집계 + 기간 없음 → clarification 예시:**
+- 입력: "주단위 매출 추이 보여줘"
+- 조건 확인: new_query ✓, 집계("추이") ✓, 기간 없음 ✓
+- needs_clarification: true
+- clarification_question: "어느 기간의 주단위 추이를 보시겠습니까?"
+- clarification_options: ["최근 1개월", "최근 3개월", "최근 6개월"]
+
+- 입력: "일별 환불 추세 분석해줘"
+- 조건 확인: new_query ✓, 집계("추세", "분석") ✓, 기간 없음 ✓
+- needs_clarification: true
+- clarification_question: "어느 기간의 일별 추세를 보시겠습니까?"
+- clarification_options: ["최근 2주", "최근 1개월", "최근 3개월"]
+
+**집계 + 기간 있음 → clarification 불필요 예시:**
+- 입력: "최근 3개월 주단위 매출 추이"
+- 조건 확인: new_query ✓, 집계("추이") ✓, 기간 있음("최근 3개월") ✗
+- needs_clarification: false
+- timeRange: 3개월 전 ~ 현재
+
+**기간 없지만 집계 아닌 경우 → clarification 불필요:**
+- 입력: "결제 목록 조회" (단순 목록)
+- 조건 확인: 집계 아님 ✗
+- needs_clarification: false (기본 7일 적용)
 
 ### 3. "최근 거래 30건 조회" 처리 예시 (정답)
 ```json
@@ -1317,6 +1347,23 @@ clarification이 필요하면 "YES", 필요 없으면 "NO"만 응답하세요.
 ⭕ 올바른 예:
 - filters: [{{{{field: "status", operator: "eq", value: "DONE"}}}}] ← 영문 상태값
 
+### NE11: 집계 요청에 임의 기간 설정 (기간 없이 추이 요청)
+❌ 틀린 예:
+- 입력: "월단위 정산 추이"
+- timeRange: 최근 7일 ← **오류! 집계 요청에 기간 확인 없이 임의 기간 설정**
+- needs_clarification: false ← **오류!**
+
+⭕ 올바른 예:
+- 입력: "월단위 정산 추이" (기간 명시 없음, new_query)
+- needs_clarification: true
+- clarification_question: "어느 기간의 월단위 추이를 보시겠습니까?"
+- clarification_options: ["최근 3개월", "최근 6개월", "최근 1년"]
+
+**예외 - clarification 불필요한 경우:**
+- 입력: "**최근 3개월** 월단위 정산 추이" (기간 명시됨)
+- needs_clarification: false ← 기간이 명시되어 있으므로 OK
+- timeRange: 3개월 전 ~ 현재
+
 ## 렌더링 타입 (preferredRenderType) - 매우 중요!
 
 사용자가 특정 렌더링 형식을 명시적으로 요청하면 반드시 **preferredRenderType** 필드를 설정하세요:
@@ -1559,8 +1606,19 @@ aggregations 생성 시 각 항목에 **metricType**을 필수로 포함하세�
 ## 기본 엔티티 규칙 (상단 최우선 규칙 참조)
 
 **⚠️ 다시 한번 강조: "거래", "결제", "트랜잭션", "내역" = Payment 엔티티!**
+- 도메인 용어가 있으면 바로 해당 엔티티로 QueryPlan을 생성하세요.
 - needs_clarification은 **절대로** true로 설정하지 마세요!
-- 도메인 용어가 있으면 바로 해당 엔티티로 QueryPlan을 생성하세요."""
+
+**유일한 예외 (3가지 조건 모두 충족 시에만):**
+- query_intent가 "new_query" AND
+- 집계 키워드(추이/추세/통계 등) 포함 AND
+- 명시적 기간 표현 없음
+→ 이 경우에만 needs_clarification: true
+
+**clarification 금지 (절대!):**
+- filter_local / aggregate_local → 이전 결과 참조이므로 clarification 금지
+- 기간이 명시된 경우 → "최근 3개월" 등 있으면 clarification 금지
+- 집계 키워드 없는 경우 → "결제 목록" 등 단순 조회는 clarification 금지"""
 
     async def _get_rag_context(self, user_message: str) -> str:
         """RAG 서비스에서 관련 문서 검색"""
@@ -1689,10 +1747,29 @@ aggregations 생성 시 각 항목에 **metricType**을 필수로 포함하세�
             logger.info(
                 f"Validation result: score={validation_result.quality_score:.2f}, "
                 f"valid={validation_result.is_valid}, "
+                f"clarification_needed={validation_result.clarification_needed}, "
                 f"issues={len(validation_result.issues)}"
             )
 
-            # 자동 수정된 plan이 있으면 우선 사용
+            # ⚠️ clarification 필요 여부 최우선 확인!
+            # MISSING_CLARIFICATION은 auto-correction보다 우선
+            # (집계 요청 시 기간 선택을 사용자에게 요청해야 함)
+            if validation_result.clarification_needed:
+                logger.info("Clarification needed - returning clarification response")
+                return {
+                    "needs_clarification": True,
+                    "clarification_question": validation_result.clarification_question,
+                    "clarification_options": validation_result.clarification_options or [],
+                    "_validation": {
+                        "score": validation_result.quality_score,
+                        "issues": [
+                            {"type": i.type.value, "message": i.message}
+                            for i in validation_result.issues
+                        ]
+                    }
+                }
+
+            # 자동 수정된 plan이 있으면 사용
             if validation_result.corrected_plan:
                 logger.info("Using auto-corrected plan")
                 corrected = validation_result.corrected_plan
@@ -1712,21 +1789,6 @@ aggregations 생성 시 각 항목에 **metricType**을 필수로 포함하세�
                     "time_ms": validation_result.validation_time_ms
                 }
                 return query_plan
-
-            # clarification 필요
-            if validation_result.clarification_needed:
-                return {
-                    "needs_clarification": True,
-                    "clarification_question": validation_result.clarification_question,
-                    "clarification_options": validation_result.clarification_options or [],
-                    "_validation": {
-                        "score": validation_result.quality_score,
-                        "issues": [
-                            {"type": i.type.value, "message": i.message}
-                            for i in validation_result.issues
-                        ]
-                    }
-                }
 
             # 검증 실패했지만 clarification도 불필요한 경우 (원본 반환)
             query_plan["_validation"] = {

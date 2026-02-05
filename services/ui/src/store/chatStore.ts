@@ -15,6 +15,7 @@ import {
   MessageResponse,
 } from '@/api/chatPersistenceApi'
 import { ratingsApi } from '@/api/ratings'
+import { aiOrchestratorApi } from '@/api/aiOrchestrator'
 
 // localStorage key for persisting current session
 const CURRENT_SESSION_KEY = 'chatCurrentSessionId'
@@ -47,7 +48,7 @@ interface ChatState {
     optionIndex: number,
     option: string,
     metadata?: ClarificationRenderSpec['metadata']
-  ) => void
+  ) => Promise<void>
 
   // Rating
   setMessageRating: (sessionId: string, messageId: string, rating: number) => void
@@ -193,7 +194,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return state.sessions.find((s) => s.id === state.currentSessionId) || null
   },
 
-  handleClarificationSelect: (
+  handleClarificationSelect: async (
     optionIndex: number,
     option: string,
     metadata?: ClarificationRenderSpec['metadata']
@@ -218,6 +219,88 @@ export const useChatStore = create<ChatState>((set, get) => ({
       metadata,
     })
 
+    // ========================================
+    // timerange_selection: 원래 질문 + 선택한 기간으로 새 API 요청
+    // ========================================
+    if (metadata?.clarificationType === 'timerange_selection' && metadata?.originalQuestion) {
+      const originalQuestion = metadata.originalQuestion
+      const combinedMessage = `${option} ${originalQuestion}`
+
+      console.log('[chatStore] Timerange selection - sending combined message:', combinedMessage)
+
+      // 사용자 선택 메시지 추가
+      const userMessage: ChatMessage = {
+        id: `msg-${Date.now()}-user`,
+        role: 'user',
+        content: option,
+        timestamp: new Date().toISOString(),
+        status: 'success',
+      }
+      get().addMessage(currentSessionId, userMessage)
+
+      // 로딩 메시지 추가
+      const loadingMessageId = `msg-${Date.now() + 1}-assistant`
+      const loadingMessage: ChatMessage = {
+        id: loadingMessageId,
+        role: 'assistant',
+        content: '조회 중...',
+        timestamp: new Date().toISOString(),
+        status: 'sending',
+      }
+      get().addMessage(currentSessionId, loadingMessage)
+
+      try {
+        // 대화 이력 구성
+        const conversationHistory = currentSession.messages.map((msg) => ({
+          id: msg.id,
+          role: msg.role,
+          content: msg.content,
+          timestamp: msg.timestamp,
+          renderSpec: msg.renderSpec,
+          queryResult: msg.queryResult,
+          queryPlan: msg.queryPlan,
+        }))
+
+        // API 호출 (원래 질문 + 선택한 기간)
+        const response = await aiOrchestratorApi.sendMessage({
+          message: combinedMessage,
+          sessionId: currentSessionId,
+          conversationHistory: conversationHistory,
+        })
+
+        // 성공 메시지로 업데이트
+        get().updateMessage(currentSessionId, loadingMessageId, {
+          content: response.aiMessage || `'${combinedMessage}'에 대한 결과입니다.`,
+          renderSpec: response.renderSpec,
+          queryResult: response.queryResult,
+          queryPlan: response.queryPlan,
+          status: 'success',
+        })
+
+        // 서버 동기화
+        const { currentUserId } = get()
+        if (currentUserId) {
+          const updatedMessage = get().sessions
+            .find((s) => s.id === currentSessionId)
+            ?.messages.find((m) => m.id === loadingMessageId)
+          if (updatedMessage) {
+            get().syncAddMessage(currentSessionId, userMessage)
+            get().syncAddMessage(currentSessionId, updatedMessage)
+          }
+        }
+      } catch (error) {
+        console.error('[chatStore] Timerange selection API error:', error)
+        get().updateMessage(currentSessionId, loadingMessageId, {
+          content: '조회 중 오류가 발생했습니다.',
+          status: 'error',
+        })
+      }
+      return
+    }
+
+    // ========================================
+    // 기존 로직: filter_local / aggregate_local
+    // ========================================
     // metadata에서 대상 결과 인덱스 추출
     const targetResultIndices = metadata?.targetResultIndices || []
 

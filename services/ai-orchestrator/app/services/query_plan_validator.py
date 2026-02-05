@@ -70,6 +70,20 @@ class QueryPlanValidatorService:
     # 유효한 연산자 목록
     VALID_OPERATORS = {"eq", "ne", "gt", "gte", "lt", "lte", "in", "like", "between"}
 
+    # 집계성 키워드 (clarification 필요 판단용)
+    AGGREGATE_KEYWORDS = ["추이", "추세", "합계", "평균", "통계", "현황", "분석", "트렌드", "변화"]
+
+    # 명시적 기간 표현 패턴
+    EXPLICIT_TIME_PATTERNS = [
+        r"최근\s*\d+\s*[일주월년개]",      # 최근 3개월, 최근 2주
+        r"지난\s*\d+\s*[일주월년개]",      # 지난 1달
+        r"\d{4}년",                        # 2024년
+        r"\d{1,2}월",                      # 3월, 12월
+        r"오늘|어제|그제",
+        r"이번\s*주|지난\s*주|이번\s*달|지난\s*달",
+        r"올해|작년|내년",
+    ]
+
     # 엔티티별 유효 필드
     ENTITY_VALID_FIELDS = {
         "Payment": {
@@ -236,7 +250,17 @@ class QueryPlanValidatorService:
         clarification_question = None
         clarification_options = None
 
-        if quality_score < self._quality_threshold and corrected_plan is None:
+        # 4-1. MISSING_CLARIFICATION 이슈가 있으면 직접 clarification 트리거
+        missing_clarification_issue = next(
+            (i for i in issues if i.type == ValidationIssueType.MISSING_CLARIFICATION),
+            None
+        )
+        if missing_clarification_issue:
+            clarification_needed = True
+            clarification_question = "어느 기간의 데이터를 조회하시겠습니까?"
+            clarification_options = ["최근 1개월", "최근 3개월", "최근 6개월", "직접 입력"]
+            logger.info(f"MISSING_CLARIFICATION detected: triggering clarification for aggregate without timerange")
+        elif quality_score < self._quality_threshold and corrected_plan is None:
             clarification_needed, clarification_question, clarification_options = \
                 self._determine_clarification(user_message, issues, query_plan)
 
@@ -370,6 +394,11 @@ class QueryPlanValidatorService:
                     suggestion="limit을 1~100 사이로 설정"
                 ))
 
+        # 7. 집계 요청 + 기간 없음 검사 (new_query일 때만)
+        aggregate_issue = self._check_aggregate_without_timerange(query_plan, user_message)
+        if aggregate_issue:
+            issues.append(aggregate_issue)
+
         return issues
 
     def _is_related_entity(self, entity1: str, entity2: str) -> bool:
@@ -382,6 +411,54 @@ class QueryPlanValidatorService:
             if entity1 in group and entity2 in group:
                 return True
         return False
+
+    def _check_aggregate_without_timerange(
+        self,
+        query_plan: Dict[str, Any],
+        user_message: str
+    ) -> Optional[ValidationIssue]:
+        """
+        집계 요청 + 기간 없음 + new_query인데 clarification 안 한 경우 검출
+
+        세 가지 조건 모두 충족 시에만 clarification 필요:
+        1. query_intent가 "new_query" (최초 질문 또는 새 주제)
+        2. 집계성 키워드 포함 (추이, 추세, 합계, 평균, 통계 등)
+        3. 명시적 기간 표현 없음
+
+        Returns:
+            ValidationIssue if clarification needed but not set, None otherwise
+        """
+        query_intent = query_plan.get("query_intent", "new_query")
+
+        # 조건 1: new_query인지 확인
+        if query_intent != "new_query":
+            return None
+
+        # 조건 2: 집계 요청인지 확인
+        message_lower = user_message.lower()
+        is_aggregate_request = any(kw in message_lower for kw in self.AGGREGATE_KEYWORDS)
+        if not is_aggregate_request:
+            return None
+
+        # 조건 3: 명시적 기간 표현이 있는지 확인
+        has_explicit_time = any(
+            re.search(pattern, user_message) for pattern in self.EXPLICIT_TIME_PATTERNS
+        )
+        if has_explicit_time:
+            return None
+
+        # 세 조건 모두 충족: clarification 필요
+        needs_clarification = query_plan.get("needs_clarification", False)
+        if not needs_clarification:
+            return ValidationIssue(
+                type=ValidationIssueType.MISSING_CLARIFICATION,
+                severity=IssueSeverity.CRITICAL,
+                field="needs_clarification",
+                message="집계 요청(추이/통계 등)에 기간이 명시되지 않았습니다. clarification 필요",
+                suggestion="needs_clarification: true로 설정하고 기간 선택 옵션 제공 (예: 최근 1개월, 3개월, 6개월)"
+            )
+
+        return None
 
     async def _llm_validate(
         self,
@@ -554,6 +631,15 @@ class QueryPlanValidatorService:
         user_message: str
     ) -> Optional[Dict[str, Any]]:
         """자동 수정 가능한 이슈 교정"""
+        # MISSING_CLARIFICATION이 있으면 auto-correction 하지 않음
+        # (clarification으로 사용자에게 기간 선택 요청해야 함)
+        has_missing_clarification = any(
+            i.type == ValidationIssueType.MISSING_CLARIFICATION for i in issues
+        )
+        if has_missing_clarification:
+            logger.info("MISSING_CLARIFICATION detected - skipping auto-correction")
+            return None
+
         corrected = dict(query_plan)
         corrected_any = False
         message_lower = user_message.lower()

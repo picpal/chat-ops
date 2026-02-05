@@ -212,6 +212,9 @@ export interface ClarificationRenderSpec extends Omit<BaseRenderSpec, 'requestId
     }>
     aggregationType?: 'aggregate_local'
     generatedAt?: string
+    // 기간 선택 clarification용 (서버에서 보내는 새 메시지 트리거)
+    originalQuestion?: string
+    clarificationType?: 'timerange_selection' | 'filter_local' | 'aggregate_local'
   }
 }
 
