@@ -1,75 +1,128 @@
 # ChatOps UI
 
-React-based frontend for the ChatOps AI Backoffice system.
+> React 기반 AI 백오피스 프론트엔드
 
 ## Tech Stack
 
-- **React 18** with TypeScript
-- **Vite** for build tooling
-- **Tailwind CSS** for styling
-- **Zustand** for state management
-- **TanStack Query** (React Query) for data fetching
-- **Recharts** for data visualization
-- **React Markdown** for content rendering
+- **React 18** + TypeScript
+- **Vite** 빌드 시스템
+- **Tailwind CSS** 스타일링
+- **Zustand** 상태 관리
+- **TanStack Query** 데이터 페칭
+- **Recharts** 데이터 시각화
+- **React Markdown** 마크다운 렌더링
 
-## Getting Started
+## 실행 방법
 
 ### Prerequisites
 
-- Node.js 18+ and npm
-- Backend services running:
-  - AI Orchestrator on `http://localhost:8000`
-  - Core API on `http://localhost:8080`
+- Node.js 18+
+- 백엔드 서비스 실행 중:
+  - AI Orchestrator: `http://localhost:8000`
+  - Core API: `http://localhost:8080`
 
-### Installation
+### 설치 및 실행
 
 ```bash
-# Install dependencies
+# 의존성 설치
 npm install
 
-# Start development server
+# 개발 서버 시작
 npm run dev
 ```
 
-The app will be available at `http://localhost:3000`
+앱이 http://localhost:3000 에서 시작됩니다.
 
-### Alternative: Use the development script
+### 스크립트
 
-```bash
-# From project root
-./scripts/dev-ui.sh
-```
+| 명령어 | 설명 |
+|--------|------|
+| `npm run dev` | 개발 서버 시작 |
+| `npm run build` | 프로덕션 빌드 |
+| `npm run preview` | 빌드 미리보기 |
+| `npm run lint` | ESLint 실행 |
+| `npm run type-check` | TypeScript 타입 검사 |
 
-## Project Structure
+## 현재 구현 상태
+
+### 핵심 기능
+
+- ✅ 채팅 인터페이스 (실시간 메시징)
+- ✅ 사이드바 네비게이션 + 세션 히스토리
+- ✅ RenderSpec 렌더러 (Table, Text, Chart, Log)
+- ✅ 페이지네이션 (queryToken 기반)
+- ✅ 별점 평가 시스템 (1-5점)
+- ✅ 시나리오 관리 대시보드
+- ✅ Quality Answer RAG 토글
+- ✅ 마크다운 테이블 렌더링
+
+### 페이지 구성
+
+| 경로 | 컴포넌트 | 설명 |
+|------|----------|------|
+| `/` | `ChatPage` | 채팅 인터페이스 |
+| `/scenarios` | `ScenariosPage` | 시나리오 관리 대시보드 |
+| `/documents` | `DocumentsPage` | RAG 문서 관리 |
+
+## 프로젝트 구조
 
 ```
 src/
-├── api/              # API clients (axios)
-├── assets/           # Static assets
-├── components/       # React components
-│   ├── chat/         # Chat interface components
-│   ├── common/       # Reusable UI components
-│   ├── layout/       # Layout components (Sidebar, Header, etc.)
-│   ├── modals/       # Modal dialogs
-│   └── renderers/    # RenderSpec renderers (Table, Chart, etc.)
-├── hooks/            # Custom React hooks
-├── store/            # Zustand stores
-├── styles/           # Global styles
-├── types/            # TypeScript type definitions
-└── utils/            # Utility functions
+├── api/              # API 클라이언트
+│   ├── chat.ts
+│   ├── documents.ts
+│   ├── ratings.ts
+│   └── settings.ts
+├── components/
+│   ├── chat/         # 채팅 컴포넌트
+│   │   ├── ChatInput.tsx
+│   │   ├── ChatMessage.tsx
+│   │   └── MessageRating.tsx
+│   ├── common/       # 공통 UI
+│   ├── layout/       # 레이아웃 (Sidebar, Header)
+│   ├── modals/       # 모달 다이얼로그
+│   ├── renderers/    # RenderSpec 렌더러
+│   │   ├── TableRenderer.tsx
+│   │   ├── ChartRenderer.tsx
+│   │   └── TextRenderer.tsx
+│   └── scenarios/    # 시나리오 관리
+│       ├── ScenariosPage.tsx
+│       ├── QualityAnswerToggle.tsx
+│       └── RatingSummaryCards.tsx
+├── hooks/            # 커스텀 훅
+│   ├── useChat.ts
+│   ├── useRatings.ts
+│   └── useSettings.ts
+├── store/            # Zustand 스토어
+├── types/            # TypeScript 타입
+└── utils/            # 유틸리티
 ```
 
-## Available Scripts
+## 주요 컴포넌트
 
-- `npm run dev` - Start development server
-- `npm run build` - Build for production
-- `npm run preview` - Preview production build
-- `npm run lint` - Run ESLint
-- `npm run type-check` - Run TypeScript type checking
+### ChatMessage
 
-## Environment Variables
+AI 응답 메시지 렌더링:
+- 마크다운 파싱 및 렌더링
+- RenderSpec 기반 테이블/차트 표시
+- 별점 평가 UI
 
-Create a `.env` file in the root directory:
+### ScenariosPage
+
+시나리오 관리 대시보드:
+- 기간별 필터 (오늘/7일/30일/전체)
+- 별점 분포 차트
+- 상세 목록 테이블
+- Quality Answer RAG 토글
+
+### QualityAnswerToggle
+
+고품질 답변 RAG 기능 ON/OFF:
+- 실시간 상태 조회
+- 저장된 답변 수 표시
+- 토글 상태 변경
+
+## 환경 변수
 
 ```env
 VITE_AI_API_URL=http://localhost:8000
@@ -78,83 +131,81 @@ VITE_APP_NAME=ChatOps AI Backoffice
 VITE_APP_VERSION=2.4
 ```
 
-## Features
+## 디자인 시스템
 
-### Current Implementation
+### 색상
 
-- ✅ Sidebar navigation with session history
-- ✅ Chat interface with real-time messaging
-- ✅ New Analysis modal for creating sessions
-- ✅ State management with Zustand
-- ✅ API integration with AI Orchestrator and Core API
-- ✅ TypeScript type safety
-- ✅ Responsive design with Tailwind CSS
+| 용도 | 색상 |
+|------|------|
+| Primary | `#137fec` |
+| Success | `emerald-500/600/700` |
+| Error | `red-500/600/700` |
+| Warning | `amber-500/600/700` |
+| Neutral | `slate-50 ~ slate-900` |
 
-### Coming Soon
+### 타이포그래피
 
-- 🔄 RenderSpec renderers (Table, Text, Chart, Log)
-- 🔄 Pagination with queryToken
-- 🔄 Advanced modals (Table Detail, Chart Detail, Log Detail)
-- 🔄 Export functionality (CSV, PDF)
-- 🔄 Search and filtering
+- 폰트: Inter (400, 500, 700, 900)
+- 아이콘: Material Symbols Outlined
 
-## Design System
+## 트러블슈팅
 
-### Colors
+### CORS 오류
 
-- Primary: `#137fec`
-- Success: `emerald-500/600/700`
-- Error: `red-500/600/700`
-- Warning: `amber-500/600/700`
-- Neutral: `slate-50 to slate-900`
+Vite 프록시 설정 확인 (`vite.config.ts`):
+```ts
+proxy: {
+  '/api': {
+    target: 'http://localhost:8000',
+    changeOrigin: true
+  }
+}
+```
 
-### Typography
+### API 연결 오류
 
-- Font: Inter (400, 500, 700, 900 weights)
-- Icons: Material Symbols Outlined
+1. 백엔드 서비스 실행 확인:
+   - AI: `curl http://localhost:8000/health`
+   - Core: `curl http://localhost:8080/api/v1/query/health`
 
-## Development Notes
+2. `.env` 파일 확인
 
-- The app uses Vite proxy to forward API requests to backend services
-- All API calls go through centralized axios clients with error handling
-- State is managed with Zustand for simplicity and performance
-- TanStack Query handles caching and synchronization with the server
-
-## Troubleshooting
-
-### CORS Issues
-
-If you encounter CORS errors, ensure the backend services are configured to accept requests from `http://localhost:3000`, or use the Vite proxy configuration (already set up in `vite.config.ts`).
-
-### API Connection Issues
-
-1. Verify backend services are running:
-   - AI Orchestrator: `http://localhost:8000/health`
-   - Core API: `http://localhost:8080/api/v1/query/health`
-
-2. Check environment variables in `.env` file
-
-### Build Issues
-
-If you encounter build errors:
+### 빌드 오류
 
 ```bash
-# Clean install
+# 클린 설치
 rm -rf node_modules package-lock.json
 npm install
 
-# Clear Vite cache
+# Vite 캐시 삭제
 rm -rf node_modules/.vite
 npm run dev
 ```
 
-## Contributing
+## API 통합
 
-1. Follow existing code structure and naming conventions
-2. Use TypeScript for type safety
-3. Write clean, self-documenting code
-4. Test components before committing
+### AI Orchestrator API
 
-## License
+```typescript
+// 채팅 메시지 전송
+POST /api/v1/chat
+{ message: string, sessionId?: string }
 
-Private project - All rights reserved
+// 별점 저장
+POST /api/v1/ratings
+{ requestId: string, rating: number }
+
+// Quality Answer RAG 상태
+GET /api/v1/settings/quality-answer-rag/status
+```
+
+### Core API
+
+```typescript
+// QueryPlan 실행
+POST /api/v1/query/start
+{ requestId, entity, operation, filters, timeRange }
+
+// 페이지네이션
+GET /api/v1/query/page/{token}
+```
