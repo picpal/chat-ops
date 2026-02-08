@@ -6,7 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
-from app.api.v1 import chat, documents, ratings
+from app.api.v1 import chat, documents, ratings, settings
 
 # Load environment variables
 load_dotenv()
@@ -47,6 +47,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
 app.include_router(documents.router, prefix="/api/v1", tags=["documents"])
 app.include_router(ratings.router, prefix="/api/v1", tags=["ratings"])
+app.include_router(settings.router, prefix="/api/v1", tags=["settings"])
 
 
 @app.get("/")

@@ -5,12 +5,35 @@
 import json
 import os
 import logging
+import asyncio
 from typing import Optional
 from datetime import datetime
 
 import psycopg
 
 logger = logging.getLogger(__name__)
+
+# Quality Answer RAG 서비스 lazy import (순환 의존성 방지)
+_qa_service = None
+_settings_service = None
+
+
+def _get_qa_service():
+    """QualityAnswerService lazy loading"""
+    global _qa_service
+    if _qa_service is None:
+        from app.services.quality_answer_service import get_quality_answer_service
+        _qa_service = get_quality_answer_service()
+    return _qa_service
+
+
+def _get_settings_service():
+    """SettingsService lazy loading"""
+    global _settings_service
+    if _settings_service is None:
+        from app.services.settings_service import get_settings_service
+        _settings_service = get_settings_service()
+    return _settings_service
 
 
 class RatingService:
@@ -138,6 +161,66 @@ class RatingService:
                 conn.commit()
 
                 logger.info(f"Rating saved: request_id={request_id}, rating={rating}")
+
+                # Quality Answer RAG: 높은 별점 답변 자동 저장
+                try:
+                    settings_svc = _get_settings_service()
+                    if settings_svc.is_quality_answer_rag_enabled():
+                        min_rating = settings_svc.get_quality_answer_min_rating()
+                        if rating >= min_rating:
+                            # 대화 이력에서 질문/답변 추출
+                            conversations = None
+                            if conversations_json:
+                                conversations = json.loads(conversations_json) if isinstance(conversations_json, str) else conversations_json
+
+                            if conversations and len(conversations) > 0:
+                                last_conv = conversations[-1]
+                                user_question = last_conv.get("userQuestion", "")
+                                ai_response = last_conv.get("aiResponse", "")
+
+                                if user_question and ai_response:
+                                    qa_svc = _get_qa_service()
+                                    # 비동기 함수를 동기 컨텍스트에서 실행
+                                    try:
+                                        loop = asyncio.get_event_loop()
+                                        if loop.is_running():
+                                            # 이미 이벤트 루프가 실행 중이면 태스크 생성
+                                            asyncio.create_task(
+                                                qa_svc.save_quality_answer(
+                                                    request_id=request_id,
+                                                    user_question=user_question,
+                                                    ai_response=ai_response,
+                                                    rating=rating,
+                                                    session_id=session_id
+                                                )
+                                            )
+                                        else:
+                                            loop.run_until_complete(
+                                                qa_svc.save_quality_answer(
+                                                    request_id=request_id,
+                                                    user_question=user_question,
+                                                    ai_response=ai_response,
+                                                    rating=rating,
+                                                    session_id=session_id
+                                                )
+                                            )
+                                        logger.info(f"Quality answer saved for request_id={request_id}, rating={rating}")
+                                    except RuntimeError:
+                                        # 이벤트 루프 없는 경우 새로 생성
+                                        asyncio.run(
+                                            qa_svc.save_quality_answer(
+                                                request_id=request_id,
+                                                user_question=user_question,
+                                                ai_response=ai_response,
+                                                rating=rating,
+                                                session_id=session_id
+                                            )
+                                        )
+                                        logger.info(f"Quality answer saved for request_id={request_id}, rating={rating}")
+                except Exception as qa_error:
+                    # Quality Answer 저장 실패해도 rating 저장은 성공으로 처리
+                    logger.warning(f"Failed to save quality answer (non-blocking): {qa_error}")
+
                 return {
                     "requestId": row[0],
                     "rating": row[1],

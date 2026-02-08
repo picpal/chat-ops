@@ -70,12 +70,67 @@ curl -X POST http://localhost:8000/api/v1/chat \
 ## 현재 구현 상태
 
 - ✅ FastAPI 기본 설정
-- ✅ POST /api/v1/chat (Core API 호출)
+- ✅ POST /api/v1/chat (자연어 → QueryPlan/Text-to-SQL → 응답)
 - ✅ GET /api/v1/chat/test (연결 테스트)
 - ✅ GET /health
-- ⬜ 자연어 → QueryPlan 변환 (Step 6에서 구현)
-- ⬜ RenderSpec 생성 (Step 6에서 구현)
+- ✅ 자연어 → QueryPlan/Text-to-SQL 변환
+- ✅ RenderSpec 생성
+- ✅ RAG 문서 검색 (pgvector)
+- ✅ 별점 평가 및 분석
+- ✅ Quality Answer RAG
 
-## 다음 단계
+## API 엔드포인트
 
-Step 3에서 PostgreSQL을 추가하고 실제 DB 데이터를 조회합니다.
+### Chat API
+| Method | Endpoint | 설명 |
+|--------|----------|------|
+| POST | `/api/v1/chat` | 자연어 채팅 (메인) |
+| GET | `/api/v1/chat/test` | Core API 연결 테스트 |
+| GET | `/api/v1/chat/config` | 현재 설정 확인 |
+| GET | `/api/v1/chat/rag/status` | RAG 서비스 상태 |
+| POST | `/api/v1/chat/rag/search` | RAG 문서 검색 테스트 |
+| POST | `/api/v1/chat/download` | 대용량 결과 다운로드 |
+
+### Documents API
+| Method | Endpoint | 설명 |
+|--------|----------|------|
+| GET | `/api/v1/documents` | 문서 목록 조회 |
+| POST | `/api/v1/documents` | 문서 생성 |
+| GET | `/api/v1/documents/{id}` | 문서 상세 조회 |
+| PUT | `/api/v1/documents/{id}` | 문서 수정 |
+| DELETE | `/api/v1/documents/{id}` | 문서 삭제 |
+| POST | `/api/v1/documents/{id}/review` | 문서 승인/반려 |
+
+### Ratings API
+| Method | Endpoint | 설명 |
+|--------|----------|------|
+| POST | `/api/v1/ratings` | 별점 저장 |
+| GET | `/api/v1/ratings/{requestId}` | 별점 조회 |
+| GET | `/api/v1/ratings/analytics/summary` | 별점 요약 통계 |
+| GET | `/api/v1/ratings/analytics/distribution` | 별점 분포 |
+| GET | `/api/v1/ratings/analytics/trend` | 별점 추이 |
+| GET | `/api/v1/ratings/analytics/details` | 별점 상세 목록 |
+
+### Settings API
+| Method | Endpoint | 설명 |
+|--------|----------|------|
+| GET | `/api/v1/settings/quality-answer-rag/status` | Quality Answer RAG 상태 |
+| PUT | `/api/v1/settings/quality-answer-rag` | Quality Answer RAG 설정 업데이트 |
+| GET | `/api/v1/settings/{key}` | 일반 설정 조회 |
+| PUT | `/api/v1/settings/{key}` | 일반 설정 업데이트 |
+
+## Quality Answer RAG
+
+높은 별점(4~5점) 답변을 자동 저장하고 유사 질문 시 참고하여 답변 품질 향상.
+
+### 데이터 흐름
+```
+[별점 4~5점] → rating_service → quality_answer_service → documents 테이블
+
+[새 질문] → knowledge_answer intent → quality_answer_service.search() → LLM 프롬프트 보강
+```
+
+### 관련 서비스
+- `app/services/settings_service.py` - 설정 CRUD
+- `app/services/quality_answer_service.py` - 고품질 답변 저장/검색
+- `app/api/v1/settings.py` - Settings REST API

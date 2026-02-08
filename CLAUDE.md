@@ -309,7 +309,7 @@ Merchant (가맹점)
 
 - Payment, PaymentHistory, BalanceTransaction
 
-### RAG 문서 구성 (26개)
+### RAG 문서 구성 (26개+)
 
 | 타입 | 개수 | 용도 |
 |------|------|------|
@@ -317,6 +317,7 @@ Merchant (가맹점)
 | business_logic | 6 | 비즈니스 규칙 |
 | error_code | 4 | 에러 처리 |
 | faq | 9 | 조회 패턴 예시 |
+| quality_answer | 동적 | 고품질 답변 자동 저장 (4점 이상) |
 
 ### 주요 조회 시나리오
 
@@ -324,3 +325,67 @@ Merchant (가맹점)
 - **환불**: 환불 현황, 사유 분석, 환불율
 - **정산**: 정산 현황, 지급 상태, 금액 검증
 - **가맹점**: 상태 현황, 수수료율
+
+## 11. Quality Answer RAG
+
+높은 별점(4~5점) 답변을 자동 저장하고, 새 질문 시 유사 고품질 답변을 참고하여 답변 품질을 향상시키는 기능.
+
+### 기능 개요
+
+```
+[별점 4~5점 저장] → rating_service.save_rating()
+                         ↓
+              quality_answer_service.save_quality_answer()
+                         ↓
+              documents 테이블에 저장 (doc_type='quality_answer')
+
+[새 질문] → _generate_knowledge_answer()
+                  ↓
+         quality_answer_service.search_similar_answers()
+                  ↓
+         "## 참고 답변 예시" 섹션으로 LLM 프롬프트에 추가
+```
+
+### 설정
+
+| 설정 키 | 기본값 | 설명 |
+|---------|--------|------|
+| `quality_answer_rag.enabled` | true | 기능 활성화 여부 |
+| `quality_answer_rag.minRating` | 4 | 저장 최소 별점 (4 또는 5) |
+
+### API 엔드포인트
+
+| Method | Endpoint | 설명 |
+|--------|----------|------|
+| GET | `/api/v1/settings/quality-answer-rag/status` | 상태 조회 (활성화 여부, 저장된 답변 수) |
+| PUT | `/api/v1/settings/quality-answer-rag` | 설정 업데이트 |
+
+### UI 토글 위치
+
+시나리오 관리 페이지 (`/scenarios`) 헤더에서 ON/OFF 토글로 제어 가능.
+
+### 관련 파일
+
+```
+services/core-api/src/main/resources/db/migration/
+  └── V22__create_settings_table.sql
+
+services/ai-orchestrator/app/
+  ├── models/settings.py
+  ├── services/
+  │   ├── settings_service.py
+  │   ├── quality_answer_service.py
+  │   └── rating_service.py (수정)
+  ├── api/v1/
+  │   ├── settings.py
+  │   └── chat.py (수정)
+  └── main.py (수정)
+
+services/ui/src/
+  ├── types/settings.ts
+  ├── api/settings.ts
+  ├── hooks/useSettings.ts
+  └── components/scenarios/
+      ├── QualityAnswerToggle.tsx
+      └── ScenariosPage.tsx (수정)
+```

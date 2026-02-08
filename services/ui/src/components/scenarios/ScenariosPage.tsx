@@ -5,6 +5,7 @@ import { SummaryCards } from './SummaryCards'
 import { RatingCharts } from './RatingCharts'
 import { RatingDetailsTable } from './RatingDetailsTable'
 import { LowRatingPanel } from './LowRatingPanel'
+import { QualityAnswerToggle } from './QualityAnswerToggle'
 
 const PERIOD_OPTIONS: { value: AnalyticsPeriod; label: string }[] = [
   { value: 'today', label: '오늘' },
@@ -32,20 +33,26 @@ export function ScenariosPage() {
                 AI 응답 별점 데이터를 분석하여 엔지니어링 개선에 활용합니다
               </p>
             </div>
-            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
-              {PERIOD_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => setPeriod(opt.value)}
-                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                    period === opt.value
-                      ? 'bg-white shadow text-gray-900'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
+            <div className="flex items-center gap-6">
+              {/* Quality Answer RAG 토글 */}
+              <QualityAnswerToggle />
+
+              {/* 기간 선택 */}
+              <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+                {PERIOD_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setPeriod(opt.value)}
+                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                      period === opt.value
+                        ? 'bg-white shadow text-gray-900'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>

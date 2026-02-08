@@ -646,9 +646,24 @@ async def _generate_knowledge_answer(
     from langchain_openai import ChatOpenAI
     from langchain_anthropic import ChatAnthropic
     from langchain_core.messages import HumanMessage
+    from app.services.settings_service import get_settings_service
+    from app.services.quality_answer_service import get_quality_answer_service
 
     # RAG 컨텍스트 구성
     context = rag_service.format_context(documents)
+
+    # Quality Answer RAG: 유사 고품질 답변 검색 및 컨텍스트 추가
+    quality_context = ""
+    try:
+        settings_service = get_settings_service()
+        if settings_service.is_quality_answer_rag_enabled():
+            qa_service = get_quality_answer_service()
+            quality_answers = await qa_service.search_similar_answers(user_message, k=2, min_similarity=0.6)
+            if quality_answers:
+                quality_context = qa_service.format_quality_context(quality_answers)
+                logger.info(f"Found {len(quality_answers)} quality answers for context enhancement")
+    except Exception as e:
+        logger.warning(f"Failed to search quality answers (non-blocking): {e}")
 
     # LLM 설정
     llm_provider = os.getenv("LLM_PROVIDER", "openai")
@@ -663,10 +678,15 @@ async def _generate_knowledge_answer(
             temperature=0
         )
 
+    # 프롬프트 구성 (quality_context가 있으면 추가)
+    full_context = context
+    if quality_context:
+        full_context = f"{context}\n\n{quality_context}"
+
     prompt = f"""당신은 PG(결제 게이트웨이) 백오피스 업무 지식 전문가입니다.
 아래 제공된 참고 문서만을 기반으로 사용자 질문에 답변하세요.
 
-{context}
+{full_context}
 
 ## 사용자 질문
 {user_message}
@@ -677,6 +697,7 @@ async def _generate_knowledge_answer(
 3. **마크다운 형식**으로 가독성 있게 작성하세요 (제목, 목록, 굵은 글씨 활용).
 4. 프로세스/절차 설명 시 **단계별 번호**를 사용하세요.
 5. 관련 에러코드, 주의사항 등 부가 정보가 문서에 있으면 함께 안내하세요.
+6. "참고 답변 예시"가 있다면 해당 답변의 톤과 구조를 참고하되, 반드시 현재 질문에 맞게 답변하세요.
 """
 
     response = await llm.ainvoke([HumanMessage(content=prompt)])
