@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { Toaster } from 'react-hot-toast'
 import { AppLayout } from '@/components/layout'
 import {
   NewAnalysisModal,
@@ -129,6 +130,28 @@ function App() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <AppContent />
+        <Toaster
+          position="bottom-right"
+          toastOptions={{
+            duration: 3000,
+            style: {
+              background: '#363636',
+              color: '#fff',
+            },
+            success: {
+              iconTheme: {
+                primary: '#10b981',
+                secondary: '#fff',
+              },
+            },
+            error: {
+              iconTheme: {
+                primary: '#ef4444',
+                secondary: '#fff',
+              },
+            },
+          }}
+        />
       </QueryClientProvider>
     </ErrorBoundary>
   )
