@@ -1,11 +1,12 @@
 import React from 'react'
-import { RenderSpec, ClarificationRenderSpec, DownloadRenderSpec } from '@/types/renderSpec'
+import { RenderSpec, ClarificationRenderSpec, DownloadRenderSpec, LogAnalysisRenderSpec } from '@/types/renderSpec'
 import { QueryResult } from '@/types/queryResult'
 import { useChatStore } from '@/store'
 import TableRenderer from './TableRenderer'
 import TextRenderer from './TextRenderer'
 import ChartRenderer from './ChartRenderer'
 import LogRenderer from './LogRenderer'
+import LogAnalysisRenderer from './LogAnalysisRenderer'
 import CompositeRenderer from './CompositeRenderer'
 import ClarificationRenderer from './ClarificationRenderer'
 import DownloadRenderer from './DownloadRenderer'
@@ -30,6 +31,8 @@ const RenderSpecDispatcher: React.FC<RenderSpecDispatcherProps> = ({
       return <ChartRenderer spec={renderSpec} data={queryResult} />
     case 'log':
       return <LogRenderer spec={renderSpec} data={queryResult} />
+    case 'log_analysis':
+      return <LogAnalysisRenderer spec={renderSpec as LogAnalysisRenderSpec} />
     case 'composite':
       return <CompositeRenderer spec={renderSpec} data={queryResult} />
     case 'clarification':

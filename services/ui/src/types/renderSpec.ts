@@ -1,4 +1,4 @@
-export type RenderSpecType = 'table' | 'text' | 'chart' | 'log' | 'composite' | 'clarification' | 'filter_local' | 'aggregate_local' | 'download'
+export type RenderSpecType = 'table' | 'text' | 'chart' | 'log' | 'log_analysis' | 'composite' | 'clarification' | 'filter_local' | 'aggregate_local' | 'download'
 
 // Server-side pagination info (added by RenderComposer)
 export interface ServerPaginationInfo {
@@ -185,6 +185,31 @@ export interface LogRenderSpec extends BaseRenderSpec {
   filterByLevel?: boolean
 }
 
+// Log Analysis Renderer Types
+export interface LogAnalysisStatistics {
+  totalEntries: number
+  errorCount: number
+  warnCount: number
+  timeRange?: string
+}
+
+export interface LogAnalysisEntry {
+  timestamp: string | null
+  level: string
+  message: string
+}
+
+export interface LogAnalysisConfig {
+  summary: string
+  statistics: LogAnalysisStatistics
+  entries: LogAnalysisEntry[]
+}
+
+export interface LogAnalysisRenderSpec extends BaseRenderSpec {
+  type: 'log_analysis'
+  log_analysis: LogAnalysisConfig
+}
+
 // Composite Renderer Types
 export interface CompositeRenderSpec extends BaseRenderSpec {
   type: 'composite'
@@ -272,6 +297,7 @@ export type RenderSpec =
   | TextRenderSpec
   | ChartRenderSpec
   | LogRenderSpec
+  | LogAnalysisRenderSpec
   | CompositeRenderSpec
   | ClarificationRenderSpec
   | FilterLocalRenderSpec
