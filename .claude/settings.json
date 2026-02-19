@@ -1,5 +1,6 @@
 {
   "enabledPlugins": {
-    "dev-assistant@dev-assistant": true
+    "dev-assistant@dev-assistant": true,
+    "claude-orchestra@claude-orchestra": true
   }
 }

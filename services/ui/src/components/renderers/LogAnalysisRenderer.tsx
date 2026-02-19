@@ -17,7 +17,8 @@ const LogAnalysisRenderer: React.FC<LogAnalysisRendererProps> = ({ spec }) => {
   const { summary, statistics, entries } = spec.log_analysis
 
   // Get level styles (same as LogRenderer)
-  const getLevelStyle = (level: string) => {
+  const getLevelStyle = (level: string | null) => {
+    if (!level) return 'text-slate-400'
     switch (level.toLowerCase()) {
       case 'error':
         return 'text-red-400'
@@ -132,7 +133,7 @@ const LogAnalysisRenderer: React.FC<LogAnalysisRendererProps> = ({ spec }) => {
                   key={idx}
                   className={cn(
                     'flex items-start gap-3 py-1.5 px-2 hover:bg-slate-800/50 rounded group',
-                    entry.level.toLowerCase() === 'error' && 'border-l-2 border-red-500 pl-3'
+                    entry.level?.toLowerCase() === 'error' && 'border-l-2 border-red-500 pl-3'
                   )}
                 >
                   {/* Line Number */}
@@ -153,7 +154,7 @@ const LogAnalysisRenderer: React.FC<LogAnalysisRendererProps> = ({ spec }) => {
 
                   {/* Level */}
                   <span className={cn('w-12 shrink-0 font-bold', getLevelStyle(entry.level))}>
-                    [{entry.level.toUpperCase().slice(0, 4)}]
+                    [{entry.level ? entry.level.toUpperCase().slice(0, 4) : '-'}]
                   </span>
 
                   {/* Message */}

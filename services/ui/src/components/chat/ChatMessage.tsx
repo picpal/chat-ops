@@ -33,7 +33,11 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
                 : 'bg-white border border-slate-200 text-slate-800'
             }`}
           >
-            <div className="text-sm whitespace-pre-wrap break-words">{message.content}</div>
+            <div className="text-sm whitespace-pre-wrap break-words">
+              {message.renderSpec?.type === 'log_analysis'
+                ? message.renderSpec.title || '서버 로그 분석 결과'
+                : message.content}
+            </div>
 
             {/* Status */}
             <div
@@ -69,7 +73,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
       </div>
 
       {/* Rendered Result */}
-      {message.renderSpec && (message.queryResult || message.renderSpec.type === 'clarification' || message.renderSpec.type === 'text') && (
+      {message.renderSpec && (message.queryResult || message.renderSpec.type === 'clarification' || message.renderSpec.type === 'text' || message.renderSpec.type === 'log_analysis') && (
         <div className="w-full">
           <RenderSpecDispatcher
             renderSpec={message.renderSpec}

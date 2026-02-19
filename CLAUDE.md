@@ -1,3 +1,49 @@
+<!-- ORCHESTRA-START -->
+# Claude Orchestra
+
+> **이 프로젝트는 Claude Orchestra 멀티 에이전트 시스템을 사용합니다.**
+
+## Preflight Check (Edit/Write 호출 전 확인)
+
+**매번 Edit/Write 호출 전:**
+1. 이 파일이 코드 파일인가? (`.orchestra/`, `.claude/`, `*.md` 제외)
+2. **YES** → STOP. `Task(High-Player/Low-Player)`로 위임
+3. **NO** → 진행 가능
+
+## 필수 규칙 (모든 요청에 적용)
+
+### 1. 매 응답 첫 줄: Intent 선언
+```
+[Maestro] Intent: {TYPE} | Reason: {근거}
+```
+
+### 2. Intent 분류
+| Intent | 조건 | 행동 |
+|--------|------|------|
+| **TRIVIAL** | 코드와 완전히 무관 | 직접 응답 |
+| **EXPLORATORY** | 코드 탐색/검색 | Task(Explorer) 호출 |
+| **AMBIGUOUS** | 불명확한 요청 | AskUserQuestion으로 명확화 |
+| **OPEN-ENDED** | **모든 코드 수정** | 전체 Phase 흐름 실행 |
+
+**"간단한 수정"도 OPEN-ENDED** — 코드 변경 크기 무관!
+
+### 3. OPEN-ENDED 필수 체크리스트
+Executor 호출 전 반드시 완료:
+- [ ] Task(Interviewer) 완료?
+- [ ] Task(Plan-Checker) 완료?
+- [ ] Task(Plan-Reviewer) "Approved"?
+- [ ] Task(Planner) 6-Section 프롬프트?
+
+### 4. 금지 행위
+- **직접 Edit/Write (코드)** → Task(High-Player/Low-Player)로 위임
+- **직접 코드 탐색** → Task(Explorer)로 위임
+- **Planning 없이 코드 수정** → Interviewer → Planner → Executor 순서 필수
+
+### 5. 상세 규칙
+`.claude/rules/maestro-protocol.md` 참조
+
+<!-- ORCHESTRA-END -->
+
 # ChatOps (AI Backoffice)
 
 ## 1. Architecture (A-Plan)
@@ -97,12 +143,12 @@ See: infra/docker/.env.example
 
 | 조건 | 7-Phase 필요 |
 |------|--------------|
-| 여러 파일 수정이 필요한 기능 | ✅ 필수 |
-| 기존 코드 수정/개선/리팩토링 | ✅ 필수 |
-| 새로운 기능 추가 | ✅ 필수 |
-| 버그 수정 (영향 범위 큼) | ✅ 필수 |
-| 단순 오타/설정값 수정 | ❌ 불필요 |
-| 파일 조회/질문 응답 | ❌ 불필요 |
+| 여러 파일 수정이 필요한 기능 | 필수 |
+| 기존 코드 수정/개선/리팩토링 | 필수 |
+| 새로운 기능 추가 | 필수 |
+| 버그 수정 (영향 범위 큼) | 필수 |
+| 단순 오타/설정값 수정 | 불필요 |
+| 파일 조회/질문 응답 | 불필요 |
 
 ### 각 Phase 상세
 
@@ -148,9 +194,9 @@ See: infra/docker/.env.example
 
 | 시나리오 | Worktree 사용 |
 |----------|---------------|
-| 단일 기능 개발 | ❌ 불필요 |
-| 복수 기능 병렬 개발 | ✅ 권장 |
-| 긴급 핫픽스 (작업 중 다른 기능 진행) | ✅ 필수 |
+| 단일 기능 개발 | 불필요 |
+| 복수 기능 병렬 개발 | 권장 |
+| 긴급 핫픽스 (작업 중 다른 기능 진행) | 필수 |
 
 ### 브랜치 네이밍 컨벤션
 

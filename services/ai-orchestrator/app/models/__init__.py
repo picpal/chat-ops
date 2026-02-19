@@ -30,6 +30,17 @@ from .validation import (
     LLMValidationScore,
     ValidationResult,
 )
+from .log_settings import (
+    LogPath,
+    MaskingPattern,
+    MaskingConfig,
+    LogAnalysisDefaults,
+    LogAnalysisSettings,
+    LogAnalysisSettingsUpdate,
+    LogEntry,
+    LogAnalysisResult,
+    LogAnalysisStatusResponse,
+)
 
 __all__ = [
     "QueryPlan",
@@ -56,4 +67,14 @@ __all__ = [
     "ValidationIssue",
     "LLMValidationScore",
     "ValidationResult",
+    # Log settings models
+    "LogPath",
+    "MaskingPattern",
+    "MaskingConfig",
+    "LogAnalysisDefaults",
+    "LogAnalysisSettings",
+    "LogAnalysisSettingsUpdate",
+    "LogEntry",
+    "LogAnalysisResult",
+    "LogAnalysisStatusResponse",
 ]

@@ -50,3 +50,5 @@ result/
 
 # Playwright MCP
 .playwright-mcp/
+# Orchestra local state
+.orchestra/

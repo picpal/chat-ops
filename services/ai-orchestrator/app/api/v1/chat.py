@@ -42,6 +42,7 @@ from app.services.sql_render_composer import compose_sql_render_spec
 from app.services.query_planner import get_query_planner, IntentType
 from app.services.render_composer import get_render_composer
 from app.services.rag_service import get_rag_service
+from app.services.log_analysis_service import get_log_analysis_service
 
 # 템플릿
 from app.templates.daily_check import (
@@ -185,6 +186,11 @@ async def chat(request: ChatRequest):
         if intent_result.intent == IntentType.KNOWLEDGE_ANSWER:
             logger.info(f"[{request_id}] Knowledge answer detected")
             return await _handle_knowledge_answer(request, request_id, intent_result)
+
+        # log_analysis면 서버 로그 분석
+        if intent_result.intent == IntentType.LOG_ANALYSIS:
+            logger.info(f"[{request_id}] Log analysis detected")
+            return await _handle_log_analysis(request, request_id, intent_result)
 
         # direct_answer면 바로 응답 반환
         if intent_result.intent == IntentType.DIRECT_ANSWER and intent_result.direct_answer_text:
@@ -630,6 +636,91 @@ async def _handle_knowledge_answer(
                 },
                 "metadata": {
                     "intent": "knowledge_answer",
+                    "error": str(e)
+                }
+            },
+            timestamp=datetime.utcnow().isoformat() + "Z"
+        )
+
+
+async def _handle_log_analysis(
+    request: ChatRequest,
+    request_id: str,
+    intent_result
+) -> ChatResponse:
+    """서버 로그 분석 처리"""
+    try:
+        log_service = get_log_analysis_service()
+
+        # 로그 분석 수행
+        result = await log_service.analyze(
+            user_question=request.message,
+            time_range_minutes=60,
+            max_lines=500,
+            level_filter=["ERROR", "WARN"]  # 에러/경고 우선
+        )
+
+        # 로그 엔트리를 표시용 데이터로 변환
+        log_entries_display = []
+        for entry in result.entries[-100:]:  # 최근 100건만 표시
+            log_entries_display.append({
+                "timestamp": entry.timestamp.isoformat() if entry.timestamp else None,
+                "level": entry.level,
+                "message": entry.message
+            })
+
+        # RenderSpec 구성
+        render_spec = {
+            "type": "log_analysis",
+            "title": "서버 로그 분석 결과",
+            "log_analysis": {
+                "summary": result.summary,
+                "statistics": {
+                    "totalEntries": len(result.entries),
+                    "errorCount": result.error_count,
+                    "warnCount": result.warn_count,
+                    "timeRange": result.time_range
+                },
+                "entries": log_entries_display
+            },
+            "metadata": {
+                "requestId": request_id,
+                "generatedAt": datetime.utcnow().isoformat() + "Z",
+                "intent": "log_analysis",
+                "confidence": intent_result.confidence
+            }
+        }
+
+        return ChatResponse(
+            request_id=request_id,
+            query_plan={
+                "query_intent": "log_analysis",
+                "requestId": request_id
+            },
+            query_result=None,
+            render_spec=render_spec,
+            ai_message=result.summary or "로그 분석이 완료되었습니다.",
+            timestamp=datetime.utcnow().isoformat() + "Z"
+        )
+
+    except Exception as e:
+        logger.error(f"[{request_id}] Log analysis error: {e}", exc_info=True)
+        return ChatResponse(
+            request_id=request_id,
+            query_plan={
+                "query_intent": "log_analysis",
+                "requestId": request_id
+            },
+            query_result=None,
+            render_spec={
+                "type": "text",
+                "title": "로그 분석 오류",
+                "text": {
+                    "content": f"로그 분석 중 오류가 발생했습니다: {str(e)}",
+                    "format": "markdown"
+                },
+                "metadata": {
+                    "intent": "log_analysis",
                     "error": str(e)
                 }
             },

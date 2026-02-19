@@ -12,6 +12,7 @@ import { ErrorBoundary } from '@/components/common'
 import { ChatInterface } from '@/components/chat'
 import { AdminPage } from '@/components/admin'
 import { ScenariosPage } from '@/components/scenarios'
+import { LogSettingsPage } from '@/components/settings'
 import { useInitializeChat } from '@/hooks'
 
 const queryClient = new QueryClient({
@@ -24,11 +25,12 @@ const queryClient = new QueryClient({
   },
 })
 
-type PageView = 'chat' | 'admin' | 'scenarios'
+type PageView = 'chat' | 'admin' | 'scenarios' | 'log-settings'
 
 const pathToView = (pathname: string): PageView => {
   if (pathname === '/admin') return 'admin'
   if (pathname === '/scenarios') return 'scenarios'
+  if (pathname === '/settings/log-analysis') return 'log-settings'
   return 'chat'
 }
 
@@ -56,7 +58,8 @@ function AppContent() {
 
   const navigateTo = useCallback((view: PageView) => {
     if (view !== currentView) {
-      window.history.pushState({ view }, '', `/${view === 'chat' ? '' : view}`)
+      const path = view === 'chat' ? '' : view === 'log-settings' ? 'settings/log-analysis' : view
+      window.history.pushState({ view }, '', `/${path}`)
       setCurrentView(view)
     }
   }, [currentView])
@@ -98,6 +101,16 @@ function AppContent() {
             >
               시나리오 관리
             </button>
+            <button
+              onClick={() => navigateTo('log-settings')}
+              className={`px-3 py-1 rounded text-sm ${
+                currentView === 'log-settings'
+                  ? 'bg-blue-600'
+                  : 'bg-gray-700 hover:bg-gray-600'
+              }`}
+            >
+              로그 설정
+            </button>
           </div>
         </div>
         {isInitializing && (
@@ -112,8 +125,10 @@ function AppContent() {
         </AppLayout>
       ) : currentView === 'admin' ? (
         <AdminPage />
-      ) : (
+      ) : currentView === 'scenarios' ? (
         <ScenariosPage />
+      ) : (
+        <LogSettingsPage />
       )}
 
       {/* Modals */}

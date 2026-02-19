@@ -220,6 +220,7 @@ class IntentType(str, Enum):
     AGGREGATE_LOCAL = "aggregate_local"  # 이전 결과 집계
     DAILY_CHECK = "daily_check"        # 템플릿 기반 일일점검
     KNOWLEDGE_ANSWER = "knowledge_answer"  # RAG 문서 기반 지식 응답
+    LOG_ANALYSIS = "log_analysis"      # 외부 서버 로그 분석 (VOC 대응)
 
 
 class IntentClassification(BaseModel):
@@ -580,6 +581,14 @@ class QueryPlannerService:
 - FAQ 유형 질문: "결제 취소 방법", "가맹점 등록 절차"
 - **핵심 구분**: 데이터(숫자/건수/목록) 조회가 아닌, 문서/지식 기반 설명 요청
 
+### 7. log_analysis (외부 서버 로그 분석)
+- **필수 조건**: "서버", "application", "VOC" 등 외부 시스템 키워드가 "로그"와 함께 있어야 함
+- 키워드: "서버 로그", "에러 로그", "VOC 로그", "장애 로그", "application log", "스택 트레이스", "stack trace"
+- VOC 대응을 위한 외부 서버 로그 파일 분석 요청
+- 예시: "서버 에러 로그 확인", "VOC 로그 분석", "스택 트레이스 찾아줘"
+- **핵심 구분**: DB 데이터가 아닌 외부 서버 로그 파일 분석 요청
+- ⚠️ "실패 원인", "예외 조회" 단독은 query_needed (DB 조회)
+
 ## 중요한 판단 규칙 - 반드시 순서대로 확인!
 
 **Step 1**: 이전 결과가 **테이블(목록)**인가, **집계 결과(텍스트)**인가?
@@ -718,6 +727,43 @@ intent가 "direct_answer"이면 **반드시** direct_answer_text에 계산된 �
 | "가상계좌란?" | knowledge_answer | 개념 설명 |
 | "에러코드 INVALID_CARD 뭐야?" | knowledge_answer | 에러코드 설명 |
 
+### CASE 8: log_analysis (외부 서버 로그 분석)
+키워드: "서버 로그", "에러 로그", "VOC 로그", "장애 로그", "application log", "스택 트레이스", "stack trace"
+| 사용자 입력 | 분류 | 이유 |
+|------------|------|------|
+| "서버 에러 로그 확인해줘" | log_analysis | "서버" + "로그" 조합 |
+| "VOC 로그 분석해줘" | log_analysis | VOC 대응 로그 분석 |
+| "스택 트레이스 찾아줘" | log_analysis | 로그 전용 개념 |
+| "서버 로그에서 오류 찾아줘" | log_analysis | 서버 로그 분석 |
+| "application log 확인" | log_analysis | 외부 시스템 로그 |
+| "장애 로그 확인" | log_analysis | 장애 로그 분석 |
+
+**핵심 구분:**
+- log_analysis: 외부 서버 로그 파일 분석 (DB 외부 데이터)
+- query_needed: 내부 DB 데이터 조회
+- ⚠️ "실패 원인", "예외 건" 단독은 query_needed (payments.failure_code 조회)
+
+### CASE 9: log_analysis vs query_needed 구분 (매우 중요!)
+| 사용자 입력 | 분류 | 이유 |
+|-----------|------|------|
+| "서버 로그 확인해줘" | log_analysis | "서버" + "로그" 조합 |
+| "에러 로그 분석" | log_analysis | "에러 로그" 키워드 |
+| "스택 트레이스 찾아" | log_analysis | 로그 전용 개념 |
+| "결제 실패 원인 조회" | query_needed | payments.failure_code |
+| "결제 예외 건 조회" | query_needed | Payment.status 조회 |
+| "로그에서 이상거래" | query_needed | "이상거래"는 DB 도메인 |
+| "예외 찾아줘" | query_needed | 도메인 데이터 조회 |
+
+**우선순위 규칙 (매우 중요!):**
+1. **도메인 키워드 우선**: "예외", "이상거래", "결제", "환불", "정산", "가맹점" 등 PG 도메인 키워드가 있으면 → **query_needed** (로그 언급 여부 무관)
+2. **외부 시스템 키워드 필수**: "서버", "VOC", "application", "스택 트레이스" 등 외부 시스템 키워드가 "로그"와 함께 있어야 → **log_analysis**
+3. **"로그에서 X 찾아줘" 패턴**: X가 도메인 데이터면 → **query_needed**
+
+예시:
+- "로그에서 예외 찾아줘" → query_needed (예외 = 도메인)
+- "로그에서 이상거래 찾아줘" → query_needed (이상거래 = 도메인)
+- "서버 로그에서 오류 찾아줘" → log_analysis (서버 + 로그)
+
 ### Negative 예시 (잘못된 분류 방지)
 | 상황 | 잘못된 분류 | 올바른 분류 | 이유 |
 |------|-----------|------------|------|
@@ -728,7 +774,7 @@ intent가 "direct_answer"이면 **반드시** direct_answer_text에 계산된 �
 
 응답은 반드시 JSON 형식으로:
 {{
-    "intent": "direct_answer" | "query_needed" | "filter_local" | "aggregate_local" | "daily_check" | "knowledge_answer",
+    "intent": "direct_answer" | "query_needed" | "filter_local" | "aggregate_local" | "daily_check" | "knowledge_answer" | "log_analysis",
     "confidence": 0.0 ~ 1.0,
     "reasoning": "판단 근거 (1-2문장)",
     "direct_answer_text": "direct_answer인 경우 **반드시 계산된 답변** 작성, 다른 intent면 null",
