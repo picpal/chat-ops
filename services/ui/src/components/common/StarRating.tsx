@@ -54,8 +54,16 @@ const StarRating: React.FC<StarRatingProps> = ({
                 ? "'FILL' 1, 'wght' 400"
                 : "'FILL' 0, 'wght' 400",
             }}
+            data-pdf-hide
           >
             star
+          </span>
+          <span
+            className={star <= displayRating ? 'text-amber-400' : 'text-slate-300'}
+            style={{ fontSize: iconSize, lineHeight: '1' }}
+            data-pdf-only
+          >
+            {star <= displayRating ? '★' : '☆'}
           </span>
         </button>
       ))}

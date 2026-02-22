@@ -52,3 +52,60 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* ========================================
+   PDF Export Mode
+   - .pdf-exporting 클래스가 [data-chat-container]에 추가될 때 활성화
+   ======================================== */
+
+/* 불필요한 UI 요소 숨김 (버튼, 아이콘 폰트, StarRating 등) */
+.pdf-exporting [data-pdf-hide] {
+  display: none !important;
+}
+
+/* PDF 전용 요소: 기본 숨김 */
+[data-pdf-only] {
+  display: none !important;
+}
+
+/* PDF 모드에서 PDF 전용 요소 표시 */
+.pdf-exporting [data-pdf-only] {
+  display: inline !important;
+}
+
+/* 숨겨진 요소의 부모 마진/패딩 정리 */
+.pdf-exporting [data-pdf-hide] + *,
+.pdf-exporting [data-pdf-hide]:last-child {
+  margin-top: 0 !important;
+}
+
+/* PDF 모드에서 스크롤바 숨김 */
+.pdf-exporting::-webkit-scrollbar {
+  display: none !important;
+}
+
+/* 연한 텍스트 가독성 향상 - slate-500 → slate-700 */
+.pdf-exporting .text-slate-500 {
+  color: #334155 !important;
+}
+
+/* 반투명 배경 보정 - 불투명으로 변환 */
+.pdf-exporting .bg-slate-50\/50 {
+  background-color: #f8fafc !important;
+}
+
+/* 애니메이션 비활성화 - opacity 중간 상태 캡처 방지 */
+.pdf-exporting * {
+  animation: none !important;
+  opacity: 1 !important;
+}
+
+/* Tailwind Typography(prose-slate) 텍스트 색상 보정 */
+.pdf-exporting .prose-slate {
+  --tw-prose-body: #1e293b;
+  --tw-prose-headings: #0f172a;
+  --tw-prose-bold: #0f172a;
+  --tw-prose-counters: #334155;
+  --tw-prose-bullets: #334155;
+  --tw-prose-code: #0f172a;
+}
