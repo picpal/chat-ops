@@ -14,6 +14,7 @@ import { AdminPage } from '@/components/admin'
 import { ScenariosPage } from '@/components/scenarios'
 import { LogSettingsPage } from '@/components/settings'
 import { useInitializeChat } from '@/hooks'
+import type { PageView } from '@/types/navigation'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -24,8 +25,6 @@ const queryClient = new QueryClient({
     },
   },
 })
-
-type PageView = 'chat' | 'admin' | 'scenarios' | 'log-settings'
 
 const pathToView = (pathname: string): PageView => {
   if (pathname === '/admin') return 'admin'
@@ -39,7 +38,7 @@ function AppContent() {
   const [currentView, setCurrentView] = useState<PageView>(
     () => pathToView(window.location.pathname)
   )
-  const { isInitializing } = useInitializeChat()
+  useInitializeChat()
 
   // Set initial history state
   useEffect(() => {
@@ -66,69 +65,23 @@ function AppContent() {
 
   return (
     <>
-      {/* Navigation bar */}
-      <nav className="bg-gray-800 text-white px-4 py-2 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <span className="font-bold text-lg">ChatOps</span>
-          <div className="flex gap-2">
-            <button
-              onClick={() => navigateTo('chat')}
-              className={`px-3 py-1 rounded text-sm ${
-                currentView === 'chat'
-                  ? 'bg-blue-600'
-                  : 'bg-gray-700 hover:bg-gray-600'
-              }`}
-            >
-              채팅
-            </button>
-            <button
-              onClick={() => navigateTo('admin')}
-              className={`px-3 py-1 rounded text-sm ${
-                currentView === 'admin'
-                  ? 'bg-blue-600'
-                  : 'bg-gray-700 hover:bg-gray-600'
-              }`}
-            >
-              문서 관리
-            </button>
-            <button
-              onClick={() => navigateTo('scenarios')}
-              className={`px-3 py-1 rounded text-sm ${
-                currentView === 'scenarios'
-                  ? 'bg-blue-600'
-                  : 'bg-gray-700 hover:bg-gray-600'
-              }`}
-            >
-              시나리오 관리
-            </button>
-            <button
-              onClick={() => navigateTo('log-settings')}
-              className={`px-3 py-1 rounded text-sm ${
-                currentView === 'log-settings'
-                  ? 'bg-blue-600'
-                  : 'bg-gray-700 hover:bg-gray-600'
-              }`}
-            >
-              로그 설정
-            </button>
-          </div>
-        </div>
-        {isInitializing && (
-          <span className="text-xs text-gray-400">Loading...</span>
-        )}
-      </nav>
-
       {/* Page content */}
       {currentView === 'chat' ? (
-        <AppLayout>
+        <AppLayout variant="chat" navigateTo={navigateTo} currentView={currentView}>
           <ChatInterface />
         </AppLayout>
       ) : currentView === 'admin' ? (
-        <AdminPage />
+        <AppLayout variant="page" navigateTo={navigateTo} currentView={currentView}>
+          <AdminPage />
+        </AppLayout>
       ) : currentView === 'scenarios' ? (
-        <ScenariosPage />
+        <AppLayout variant="page" navigateTo={navigateTo} currentView={currentView}>
+          <ScenariosPage />
+        </AppLayout>
       ) : (
-        <LogSettingsPage />
+        <AppLayout variant="page" navigateTo={navigateTo} currentView={currentView}>
+          <LogSettingsPage />
+        </AppLayout>
       )}
 
       {/* Modals */}
