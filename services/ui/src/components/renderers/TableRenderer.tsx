@@ -3,7 +3,7 @@ import { TableRenderSpec } from '@/types/renderSpec'
 import { QueryResult } from '@/types/queryResult'
 import { Card, Badge, Button, Icon } from '@/components/common'
 import { usePagination, useModal } from '@/hooks'
-import { formatCurrency, formatDate, getJSONPath, downloadCSV, cn } from '@/utils'
+import { formatCurrency, formatDate, formatNumber, getJSONPath, downloadCSV, cn } from '@/utils'
 
 interface TableRendererProps {
   spec: TableRenderSpec
@@ -84,8 +84,13 @@ const TableRenderer: React.FC<TableRendererProps> = ({ spec, data }) => {
         return formatDate(value)
       case 'status':
         return <Badge status={String(value)}>{String(value)}</Badge>
-      case 'number':
-        return typeof value === 'number' ? value.toLocaleString() : value
+      case 'number': {
+        const numValue = typeof value === 'string' ? parseFloat(value) : value
+        if (typeof numValue === 'number' && Number.isFinite(numValue)) {
+          return Number.isInteger(numValue) ? formatNumber(numValue, 0) : formatNumber(numValue, 2)
+        }
+        return value
+      }
       default:
         return String(value)
     }

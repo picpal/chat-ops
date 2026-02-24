@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react'
 import { useModal, useServerPagination } from '@/hooks'
 import { Icon, Badge } from '@/components/common'
-import { formatCurrency, formatDate, cn } from '@/utils'
+import { formatCurrency, formatDate, formatNumber, cn } from '@/utils'
 import { TableRenderSpec, TableColumn } from '@/types/renderSpec'
 
 const ROWS_PER_PAGE = 10
@@ -173,8 +173,13 @@ const TableDetailModal: React.FC = () => {
         return formatDate(value)
       case 'status':
         return <Badge status={String(value)}>{String(value)}</Badge>
-      case 'number':
-        return typeof value === 'number' ? value.toLocaleString() : value
+      case 'number': {
+        const numValue = typeof value === 'string' ? parseFloat(value) : value
+        if (typeof numValue === 'number' && Number.isFinite(numValue)) {
+          return Number.isInteger(numValue) ? formatNumber(numValue, 0) : formatNumber(numValue, 2)
+        }
+        return value
+      }
       default:
         return String(value)
     }

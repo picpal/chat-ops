@@ -492,4 +492,84 @@ class SqlBuilderServiceUnitTest {
                 .hasMessageContaining("Unsupported operator");
         }
     }
+
+    @Nested
+    @DisplayName("COUNT 쿼리 생성")
+    class CountQueries {
+
+        @Test
+        @DisplayName("GROUP BY 포함 aggregate 쿼리 - 서브쿼리 래핑된 COUNT 생성")
+        void countQueryWithGroupBy() {
+            Map<String, Object> queryPlan = Map.of(
+                "entity", "Order",
+                "operation", "aggregate",
+                "aggregations", List.of(
+                    Map.of("function", "count", "field", "*", "alias", "order_count")
+                ),
+                "groupBy", List.of("status"),
+                "limit", 100
+            );
+
+            SqlBuilderService.SqlQuery result = sqlBuilderService.buildCountQuery(queryPlan);
+
+            // GROUP BY가 있으면 서브쿼리로 래핑되어야 함
+            // 기대 패턴: SELECT COUNT(*) AS total FROM (SELECT status FROM orders ... GROUP BY status) sub
+            assertThat(result.getSql())
+                .contains("SELECT COUNT(*) AS total")
+                .contains("FROM (")
+                .contains("GROUP BY status")
+                .contains(") sub");
+            // 서브쿼리 래핑이므로 "COUNT(*) AS total FROM orders"가 직접 이어지지 않아야 함
+            assertThat(result.getSql())
+                .doesNotContain("COUNT(*) AS total FROM orders");
+        }
+
+        @Test
+        @DisplayName("GROUP BY 없는 list 쿼리 - 단순 COUNT 유지")
+        void countQueryWithoutGroupBy() {
+            Map<String, Object> queryPlan = Map.of(
+                "entity", "Order",
+                "operation", "list",
+                "limit", 10
+            );
+
+            SqlBuilderService.SqlQuery result = sqlBuilderService.buildCountQuery(queryPlan);
+
+            // GROUP BY 없으면 서브쿼리 래핑 없이 단순 COUNT
+            // 기대 패턴: SELECT COUNT(*) AS total FROM orders ...
+            assertThat(result.getSql())
+                .contains("SELECT COUNT(*) AS total FROM orders");
+            assertThat(result.getSql())
+                .doesNotContain("FROM (");
+        }
+
+        @Test
+        @DisplayName("GROUP BY + 필터 포함 aggregate 쿼리 - 서브쿼리 래핑 + WHERE 조건 포함")
+        void countQueryWithGroupByAndFilters() {
+            Map<String, Object> queryPlan = Map.of(
+                "entity", "Order",
+                "operation", "aggregate",
+                "aggregations", List.of(
+                    Map.of("function", "count", "field", "*", "alias", "order_count")
+                ),
+                "groupBy", List.of("status"),
+                "filters", List.of(
+                    Map.of("field", "totalAmount", "operator", "gt", "value", 1000)
+                ),
+                "limit", 100
+            );
+
+            SqlBuilderService.SqlQuery result = sqlBuilderService.buildCountQuery(queryPlan);
+
+            // GROUP BY + 필터 → 서브쿼리 래핑 + WHERE 조건 포함
+            // 기대 패턴: SELECT COUNT(*) AS total FROM (SELECT status FROM orders WHERE total_amount > ? GROUP BY status) sub
+            assertThat(result.getSql())
+                .contains("SELECT COUNT(*) AS total")
+                .contains("FROM (")
+                .contains("WHERE total_amount > ?")
+                .contains("GROUP BY status")
+                .contains(") sub");
+            assertThat(result.getParams()).contains(1000);
+        }
+    }
 }

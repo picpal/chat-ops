@@ -167,9 +167,9 @@ public class QueryExecutorService {
         metadata.put("dataSource", "postgresql");
         metadata.put("executedAt", Instant.now().toString());
 
-        // list/search 작업에서 totalRows 계산
+        // list/search/aggregate 작업에서 totalRows 계산
         int totalRows = 0;
-        if ("list".equals(operation) || "search".equals(operation)) {
+        if ("list".equals(operation) || "search".equals(operation) || "aggregate".equals(operation)) {
             totalRows = executeCountQuery(queryPlan);
             metadata.put("totalRows", totalRows);
         }

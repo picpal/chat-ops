@@ -45,18 +45,47 @@ public class SqlBuilderService {
 
     /**
      * QueryPlan을 기반으로 COUNT 쿼리 생성 (totalRows 계산용)
+     * groupBy가 있는 경우 서브쿼리 래핑 방식으로 COUNT SQL 생성
      */
+    @SuppressWarnings("unchecked")
     public SqlQuery buildCountQuery(Map<String, Object> queryPlan) {
         String entity = (String) queryPlan.get("entity");
         String tableName = chatOpsProperties.getTableName(entity);
         List<Object> params = new ArrayList<>();
         StringBuilder sql = new StringBuilder();
 
-        sql.append("SELECT COUNT(*) AS total FROM ").append(tableName);
+        List<String> groupByFields = (List<String>) queryPlan.get("groupBy");
 
-        String whereClause = buildWhereClause(queryPlan, entity, params);
-        if (!whereClause.isEmpty()) {
-            sql.append(" WHERE ").append(whereClause);
+        if (groupByFields != null && !groupByFields.isEmpty()) {
+            // GROUP BY가 있는 경우: 서브쿼리 래핑
+            // SELECT {groupByColumns} FROM {table} WHERE {conditions} GROUP BY {groupByColumns}
+            StringJoiner groupByColumnJoiner = new StringJoiner(", ");
+            for (String field : groupByFields) {
+                String column = chatOpsProperties.getColumnName(entity, field);
+                groupByColumnJoiner.add(column);
+            }
+            String groupByColumns = groupByColumnJoiner.toString();
+
+            StringBuilder innerSql = new StringBuilder();
+            innerSql.append("SELECT ").append(groupByColumns);
+            innerSql.append(" FROM ").append(tableName);
+
+            String whereClause = buildWhereClause(queryPlan, entity, params);
+            if (!whereClause.isEmpty()) {
+                innerSql.append(" WHERE ").append(whereClause);
+            }
+
+            innerSql.append(" GROUP BY ").append(groupByColumns);
+
+            sql.append("SELECT COUNT(*) AS total FROM (").append(innerSql).append(") sub");
+        } else {
+            // GROUP BY가 없는 경우: 기존 단순 COUNT 로직
+            sql.append("SELECT COUNT(*) AS total FROM ").append(tableName);
+
+            String whereClause = buildWhereClause(queryPlan, entity, params);
+            if (!whereClause.isEmpty()) {
+                sql.append(" WHERE ").append(whereClause);
+            }
         }
 
         log.debug("Built count SQL: {} with params: {}", sql, params);
