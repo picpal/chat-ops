@@ -63,6 +63,9 @@ const Sidebar: React.FC<SidebarProps> = ({ navigateTo, currentView }) => {
     setCurrentSession(sessionId)
     // Load messages from server if not already loaded
     await loadSessionMessages(sessionId)
+    if (currentView !== 'chat') {
+      navigateTo('chat')
+    }
   }
 
   const handleDeleteSession = async (
