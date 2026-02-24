@@ -104,9 +104,74 @@ def detect_aggregation_functions(sql: str) -> List[AggregationInfo]:
     return aggregations
 
 
+def _extract_main_query(sql: str) -> str:
+    """
+    CTE(WITH ... AS (...)) 블록을 건너뛰고 메인 쿼리 부분만 반환.
+
+    WITH 절이 없으면 원본 SQL을 그대로 반환한다.
+    WITH 절이 있으면 괄호 깊이(depth) 추적으로 CTE 범위를 파악하고,
+    마지막 CTE 닫는 괄호 이후의 SELECT 부분만 반환한다.
+
+    다중 CTE (`WITH a AS (...), b AS (...)`) 도 처리한다.
+
+    동작 원리:
+    - WITH 헤더에서 첫 번째 '(' 를 만나면 CTE 바디 추적 시작
+    - depth 가 0 으로 돌아오면 하나의 CTE 바디 종료
+    - 종료 직후 ',' 가 있으면 다음 CTE 를 계속 추적
+    - ',' 가 없으면 WITH 블록 전체가 끝난 것 → 이후가 메인 쿼리
+
+    Args:
+        sql: SQL 쿼리 문자열
+
+    Returns:
+        메인(외부) SELECT 쿼리 문자열
+    """
+    stripped = sql.strip()
+    if not re.match(r'\bWITH\b', stripped, re.IGNORECASE):
+        return sql
+
+    # WITH 키워드 이후부터 탐색
+    with_match = re.match(r'\bWITH\b', stripped, re.IGNORECASE)
+    pos = with_match.end()
+
+    while pos < len(stripped):
+        ch = stripped[pos]
+
+        if ch == '(':
+            # CTE 바디 시작: 괄호 깊이 추적
+            depth = 1
+            pos += 1
+            while pos < len(stripped) and depth > 0:
+                if stripped[pos] == '(':
+                    depth += 1
+                elif stripped[pos] == ')':
+                    depth -= 1
+                pos += 1
+            # 여기서 pos 는 닫는 ')' 다음 위치
+            # 뒤에 쉼표가 오면 다음 CTE 계속, 아니면 메인 쿼리 시작
+            rest = stripped[pos:]
+            comma_match = re.match(r'\s*,', rest)
+            if comma_match:
+                # 다음 CTE 로 계속
+                pos += comma_match.end()
+            else:
+                # WITH 블록 종료 → 이후가 메인 쿼리
+                select_match = re.search(r'\bSELECT\b', rest, re.IGNORECASE)
+                if select_match:
+                    return rest[select_match.start():]
+                return sql  # fallback
+        else:
+            pos += 1
+
+    return sql  # fallback
+
+
 def detect_group_by(sql: str) -> Tuple[bool, List[str]]:
     """
-    SQL에서 GROUP BY 절 감지
+    SQL에서 GROUP BY 절 감지.
+
+    CTE(`WITH ... AS (...)`) 구문이 포함된 경우 외부(메인) 쿼리의
+    GROUP BY만 파싱하여, CTE 내부의 GROUP BY는 무시한다.
 
     Args:
         sql: SQL 쿼리 문자열
@@ -114,10 +179,13 @@ def detect_group_by(sql: str) -> Tuple[bool, List[str]]:
     Returns:
         (has_group_by, group_by_columns) 튜플
     """
+    # CTE 블록을 제거하고 메인 쿼리만 추출
+    main_query = _extract_main_query(sql)
+
     # GROUP BY 절 추출
     group_by_match = re.search(
         r'\bGROUP\s+BY\s+(.+?)(?=\s*(?:HAVING|ORDER\s+BY|LIMIT|OFFSET|;|$))',
-        sql,
+        main_query,
         re.IGNORECASE | re.DOTALL
     )
 
@@ -521,8 +589,8 @@ SCHEMA_PROMPT = """
 | total_refund_amount | BIGINT | 총 환불 금액 |
 | total_fee | BIGINT | 총 수수료 |
 | net_amount | BIGINT | 정산 금액 |
-| payment_count | INTEGER | 결제 건수 |
-| refund_count | INTEGER | 환불 건수 |
+| payment_count | INTEGER | 해당 정산 기간(period_start~period_end) 내 결제 건수. ⚠️ 가맹점의 총 거래 건수/월별 평균 거래 건수 조회 시에는 payments 테이블에서 COUNT(*)를 사용하세요 |
+| refund_count | INTEGER | 해당 정산 기간 내 환불 건수 |
 | status | VARCHAR(20) | 상태: PENDING, PROCESSED, PAID_OUT, FAILED |
 | created_at | TIMESTAMPTZ | 생성 시간 |
 
@@ -629,6 +697,20 @@ SCHEMA_PROMPT = """
 - 예: "INVALID_CARD 오류로 집계된 결제건의 상세이력"
   → WHERE p.failure_code = 'INVALID_CARD' 조건 적용
   → payments와 payment_history 조인
+
+### 엔티티 선택 가이드 (중요!)
+
+| 질문 키워드 | 사용할 테이블 | 이유 |
+|------------|-------------|------|
+| "거래 건수", "결제 건수", "월별 평균 건수" | **payments** (COUNT(*)) | 개별 트랜잭션 기반 집계 |
+| "거래 금액", "매출", "결제 금액 합계" | **payments** (SUM(amount)) | 개별 결제 금액 기반 |
+| "정산 현황", "정산 금액", "지급 상태" | **settlements** | 정산 프로세스 데이터 |
+| "환불 건수", "환불 금액" | **refunds** | 환불 트랜잭션 데이터 |
+
+⚠️ **settlements.payment_count vs payments COUNT(*)**:
+- settlements.payment_count: 하나의 정산 레코드에 포함된 결제 건수 (일별 정산 단위)
+- payments COUNT(*): 실제 개별 거래 트랜잭션 수
+- "평균 거래 건수", "월 평균 결제 건수" → payments에서 월별 GROUP BY 후 COUNT(*), 그 다음 AVG
 """
 
 
@@ -805,6 +887,8 @@ class TextToSqlService:
 - 문자열 비교 시 정확한 값 사용 (예: status = 'DONE')
 - LIMIT: 사용자가 건수를 명시한 경우에만 추가
 - 결제 실패/오류 조회: status='ABORTED' 사용, "상세" 키워드 시 failure_code와 failure_message 모두 SELECT, "건수" 키워드 시 COUNT(*) 집계 + GROUP BY 필수
+- 엔티티 선택: 질문의 핵심 의도에 맞는 테이블 사용. "거래 건수/결제 건수"는 payments, "정산"은 settlements
+- 재시도 시: 이전 SQL의 테이블을 유지하고 SQL 구문만 수정
 """ + time_rules + """
 ## 시간 그룹핑 시 포맷팅 (중요!)
 GROUP BY로 시간을 묶을 때, 사용자가 읽기 쉬운 형태로 포맷팅하세요:
@@ -938,6 +1022,27 @@ GROUP BY merchant_id
 ORDER BY percentage DESC;
 ```
 
+### 패턴 4: 기간별 평균 집계 (Nested Aggregation)
+**인식 키워드**: "월별 평균", "N개월 평균 건수", "평균 거래 건수"
+
+**올바른 SQL 구조** (2단계 집계):
+```sql
+WITH period_counts AS (
+    SELECT merchant_id,
+           TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
+           COUNT(*) AS period_count
+    FROM payments
+    WHERE created_at >= NOW() - INTERVAL '3 months' AND status = 'DONE'
+    GROUP BY merchant_id, DATE_TRUNC('month', created_at)
+)
+SELECT merchant_id, ROUND(AVG(period_count), 2) AS avg_monthly_count
+FROM period_counts
+GROUP BY merchant_id
+ORDER BY avg_monthly_count DESC;
+```
+
+⚠️ settlements.payment_count의 AVG를 사용하지 마세요! 의미가 다릅니다.
+
 ### 패턴 인식 규칙 요약
 | 키워드 조합 | 사용할 패턴 |
 |------------|-----------|
@@ -945,6 +1050,7 @@ ORDER BY percentage DESC;
 | "상위/하위 N개" 단독 | 단순 ORDER BY + LIMIT |
 | "성공/실패 동시 집계" | 패턴 2 (FILTER) |
 | "비율/점유율" | 패턴 3 (윈도우 함수) |
+| "월별 평균 건수", "N개월 평균" | 패턴 4 (2단계 CTE 집계) |
 """)
 
         # 스키마 정보
@@ -1232,6 +1338,36 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
 
         return raw_sql, validation_result, chart_type, insight_template, summary_stats_template
 
+    @staticmethod
+    def _prepare_count_sql(sql: str) -> str:
+        """
+        원본 SQL을 COUNT 쿼리용 SQL로 변환 (DB 연결 없는 순수 변환 로직)
+
+        수행 작업:
+        1. LIMIT/OFFSET 제거
+        2. ORDER BY 제거 (COUNT에서 불필요)
+        3. 끝의 세미콜론 제거 (서브쿼리 내부에 세미콜론이 있으면 PostgreSQL 구문 오류 발생)
+        4. COUNT(*) 서브쿼리로 래핑
+
+        Args:
+            sql: 원본 SELECT SQL
+
+        Returns:
+            COUNT(*) 래핑된 SQL 문자열
+        """
+        # LIMIT/OFFSET 제거
+        count_sql = re.sub(r'\bLIMIT\s+\d+', '', sql, flags=re.IGNORECASE)
+        count_sql = re.sub(r'\bOFFSET\s+\d+', '', count_sql, flags=re.IGNORECASE)
+
+        # ORDER BY 제거 (COUNT에서 불필요)
+        count_sql = re.sub(r'\bORDER\s+BY\s+[^)]+$', '', count_sql, flags=re.IGNORECASE)
+
+        # 서브쿼리 래핑 전 끝의 세미콜론 제거
+        # CTE SQL 등에서 `;`가 포함되면 서브쿼리 내부에 남아 PostgreSQL 구문 오류 발생
+        count_sql = count_sql.strip().rstrip(';').strip()
+
+        return f"SELECT COUNT(*) as cnt FROM ({count_sql}) sub"
+
     def _get_count(self, sql: str) -> int:
         """
         원본 SQL을 COUNT 쿼리로 변환하여 전체 건수 확인
@@ -1242,17 +1378,7 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
         Returns:
             전체 행 수
         """
-        import re
-
-        # LIMIT/OFFSET 제거
-        count_sql = re.sub(r'\bLIMIT\s+\d+', '', sql, flags=re.IGNORECASE)
-        count_sql = re.sub(r'\bOFFSET\s+\d+', '', count_sql, flags=re.IGNORECASE)
-
-        # ORDER BY 제거 (COUNT에서 불필요)
-        count_sql = re.sub(r'\bORDER\s+BY\s+[^)]+$', '', count_sql, flags=re.IGNORECASE)
-
-        # SELECT ... → SELECT COUNT(*) FROM (...) sub
-        count_sql = f"SELECT COUNT(*) as cnt FROM ({count_sql.strip()}) sub"
+        count_sql = self._prepare_count_sql(sql)
 
         try:
             with self._get_readonly_connection() as conn:
@@ -1406,7 +1532,7 @@ SQL을 생성하기 전에, 먼저 사용자 질문이 다음 중 어떤 유형�
             )
 
             raw_sql, validation_result, llm_chart_type, insight_template, summary_stats_template = await self.generate_sql(
-                f"{question}\n\n(이전 SQL 오류: {result.error}. 다른 방법으로 시도해주세요.)",
+                f"{question}\n\n(이전 SQL 오류: {result.error}. 같은 테이블에서 SQL 구문만 수정하세요. 다른 테이블로 변경하지 마세요.)",
                 retry_context
             )
 

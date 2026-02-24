@@ -104,7 +104,10 @@ READY → WAITING_FOR_DEPOSIT → DONE (입금 완료)
 2. 정산 대상 조회: WHERE is_settled = false AND status = 'DONE'
 3. 취소 가능 결제: WHERE status IN ('DONE', 'PARTIAL_CANCELED') AND balance_amount > 0
 4. 상태별 현황: GROUP BY status
-5. 결제 수단별 현황: GROUP BY method""",
+5. 결제 수단별 현황: GROUP BY method
+6. **거래 건수 집계 (중요!)**: 가맹점별/월별 거래 건수를 조회할 때는 반드시 payments 테이블에서 COUNT(*)를 사용하세요.
+   - 월별 평균 거래 건수: 먼저 월별 COUNT(*) GROUP BY, 그 다음 AVG()
+   - settlements.payment_count는 일별 정산 레코드의 건수이므로 거래 건수 집계에 부적합합니다.""",
         "status": "active",
         "submitted_by": "system"
     },
@@ -280,9 +283,11 @@ PENDING → SUCCEEDED (환불 승인)
 - total_fee: 총 수수료 (결제 금액 × 수수료율)
 - net_amount: 정산 금액 = 결제금액 - 환불금액 - 수수료
 
-**정산 건수**
-- payment_count: 결제 건수
-- refund_count: 환불 건수
+**정산 건수 (⚠️ 정산 기간 단위)**
+- payment_count: 해당 정산 기간(period_start~period_end) 내 포함된 결제 건수.
+  - 주의: 이 값은 일별/주별 정산 레코드 하나에 포함된 건수입니다.
+  - "가맹점의 총 거래 건수"나 "월별 평균 거래 건수"를 구할 때는 payments 테이블에서 COUNT(*)를 사용하세요.
+- refund_count: 해당 정산 기간 내 환불 건수
 
 **정산 상태 (status)**
 - PENDING: 정산 대기 (집계 완료, 지급 대기)
@@ -1449,7 +1454,19 @@ WHERE card_installment_months >= 6
 
 - 금액 집계 시 status = 'DONE' 필터 권장
 - 취소 금액은 별도 집계 (canceled_amount)
-- 정산금액 계산 시 수수료 차감 필요""",
+- 정산금액 계산 시 수수료 차감 필요
+
+#### 6. 건수 집계 시 테이블 선택 (중요!)
+
+| 원하는 정보 | 사용할 테이블 | SQL 패턴 |
+|------------|-------------|---------|
+| 가맹점별 총 거래 건수 | payments | COUNT(*) GROUP BY merchant_id |
+| 월별 평균 거래 건수 | payments | CTE: 월별 COUNT(*), 외부: AVG() |
+| 일별 거래 건수 추이 | payments | COUNT(*) GROUP BY DATE(created_at) |
+| 정산 레코드당 건수 | settlements | payment_count 컬럼 직접 사용 |
+
+**주의**: settlements.payment_count는 "정산 레코드당 건수"이므로 AVG(payment_count)는 "정산당 평균 건수"입니다.
+"월 평균 거래 건수"를 구하려면 payments에서 월별 COUNT 후 AVG를 사용하세요.""",
         "status": "active",
         "submitted_by": "system"
     }

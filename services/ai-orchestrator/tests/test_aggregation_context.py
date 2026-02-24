@@ -135,6 +135,95 @@ class TestDetectGroupBy:
         assert columns == ["merchant_id"]
 
 
+class TestDetectGroupByCTE:
+    """CTE 포함 쿼리의 GROUP BY 감지 테스트"""
+
+    def test_cte_with_inner_group_by_only(self):
+        """CTE 내부에만 GROUP BY가 있고 메인 쿼리에는 없는 경우 → (False, [])"""
+        sql = """
+WITH top_merchants AS (
+    SELECT merchant_id, COUNT(*) AS cnt
+    FROM payments
+    GROUP BY merchant_id
+    ORDER BY cnt DESC LIMIT 5
+)
+SELECT t.merchant_id, p.status, COUNT(*) AS cnt
+FROM top_merchants t
+JOIN payments p ON t.merchant_id = p.merchant_id
+ORDER BY t.merchant_id
+"""
+        has_group, columns = detect_group_by(sql)
+
+        assert has_group is False
+        assert columns == []
+
+    def test_cte_with_outer_group_by(self):
+        """CTE 내부 + 외부 모두 GROUP BY → 외부 컬럼만 반환"""
+        sql = """
+WITH top_merchants AS (
+    SELECT merchant_id, COUNT(*) AS cnt
+    FROM payments
+    GROUP BY merchant_id
+    ORDER BY cnt DESC LIMIT 5
+)
+SELECT t.merchant_id, EXTRACT(HOUR FROM p.created_at) AS hour, COUNT(*) AS cnt
+FROM top_merchants t
+JOIN payments p ON t.merchant_id = p.merchant_id
+GROUP BY t.merchant_id, hour
+ORDER BY t.merchant_id, hour
+"""
+        has_group, columns = detect_group_by(sql)
+
+        assert has_group is True
+        assert "t.merchant_id" in columns
+        assert "hour" in columns
+        assert "merchant_id" not in columns  # CTE 내부 컬럼이 아니라 alias 형태
+
+    def test_cte_with_no_group_by(self):
+        """CTE 있지만 GROUP BY 없음 → (False, [])"""
+        sql = """
+WITH recent_payments AS (
+    SELECT payment_key, merchant_id, amount
+    FROM payments
+    WHERE created_at >= NOW() - INTERVAL '7 days'
+)
+SELECT r.payment_key, r.merchant_id, r.amount
+FROM recent_payments r
+ORDER BY r.amount DESC
+"""
+        has_group, columns = detect_group_by(sql)
+
+        assert has_group is False
+        assert columns == []
+
+    def test_multiple_cte(self):
+        """다중 CTE에서 메인 쿼리 GROUP BY 파싱"""
+        sql = """
+WITH cte_a AS (
+    SELECT merchant_id, SUM(amount) AS total
+    FROM payments
+    GROUP BY merchant_id
+),
+cte_b AS (
+    SELECT merchant_id, COUNT(*) AS refund_cnt
+    FROM refunds r
+    JOIN payments p ON r.payment_key = p.payment_key
+    GROUP BY merchant_id
+)
+SELECT a.merchant_id, a.total, b.refund_cnt
+FROM cte_a a
+JOIN cte_b b ON a.merchant_id = b.merchant_id
+GROUP BY a.merchant_id, a.total, b.refund_cnt
+ORDER BY a.total DESC
+"""
+        has_group, columns = detect_group_by(sql)
+
+        assert has_group is True
+        assert "a.merchant_id" in columns
+        assert "a.total" in columns
+        assert "b.refund_cnt" in columns
+
+
 class TestBuildAggregationContext:
     """집계 컨텍스트 생성 테스트"""
 

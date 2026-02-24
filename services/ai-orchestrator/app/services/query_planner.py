@@ -460,6 +460,57 @@ class QueryPlannerService:
         logger.info(f"Using Clarification LLM: {clarification_model}")
         return llm
 
+    def _build_results_summary(self, previous_results: Optional[List[Dict[str, Any]]]) -> str:
+        """
+        이전 조회 결과로부터 results_summary 문자열을 생성합니다.
+        sql_summary 필드가 있으면 "SQL 로직" 섹션으로 포함합니다.
+
+        Args:
+            previous_results: 이전 조회 결과 요약 목록
+
+        Returns:
+            str: 포맷된 results_summary 문자열 (결과 없으면 빈 문자열)
+        """
+        if not previous_results:
+            return ""
+
+        results_summary = "\n### 이전 조회 결과:\n"
+        latest_amount = None  # 가장 최근 금액 (계산용)
+
+        for i, r in enumerate(previous_results):
+            entity = r.get("entity", "unknown")
+            count = r.get("count", 0)
+            aggregation = r.get("aggregation", "")
+            total_amount = r.get("total_amount")
+            data_summary = r.get("data_summary", "")
+            sql_summary = r.get("sql_summary")
+
+            results_summary += f"- 결과 #{i+1}: {entity} {count}건"
+
+            # 실제 금액 데이터 포함
+            if total_amount:
+                results_summary += f" | **금액 합계: ${total_amount:,.0f}**"
+                latest_amount = total_amount  # 가장 최근 금액 저장
+
+            if aggregation:
+                results_summary += f" | 집계 결과: {aggregation}"
+
+            if data_summary and not total_amount:
+                results_summary += f" | {data_summary}"
+
+            # SQL 로직 요약 포함
+            if sql_summary:
+                results_summary += f" | **SQL 로직**: {sql_summary}"
+
+            results_summary += "\n"
+
+        # 가장 최근 금액 강조
+        if latest_amount:
+            results_summary += f"\n⚠️ **계산에 사용할 금액: ${latest_amount:,.0f}**\n"
+            results_summary += "이 금액을 기준으로 수수료, 나눗셈 등 계산을 수행하세요!\n"
+
+        return results_summary
+
     async def classify_intent(
         self,
         user_message: str,
@@ -482,38 +533,8 @@ class QueryPlannerService:
 
         llm = self._get_llm()  # 가벼운 모델 사용
 
-        # 이전 결과 요약 생성 (실제 금액 데이터 포함)
-        results_summary = ""
-        latest_amount = None  # 가장 최근 금액 (계산용)
-
-        if previous_results:
-            results_summary = "\n### 이전 조회 결과:\n"
-            for i, r in enumerate(previous_results):
-                entity = r.get("entity", "unknown")
-                count = r.get("count", 0)
-                aggregation = r.get("aggregation", "")
-                total_amount = r.get("total_amount")
-                data_summary = r.get("data_summary", "")
-
-                results_summary += f"- 결과 #{i+1}: {entity} {count}건"
-
-                # 실제 금액 데이터 포함
-                if total_amount:
-                    results_summary += f" | **금액 합계: ${total_amount:,.0f}**"
-                    latest_amount = total_amount  # 가장 최근 금액 저장
-
-                if aggregation:
-                    results_summary += f" | 집계 결과: {aggregation}"
-
-                if data_summary and not total_amount:
-                    results_summary += f" | {data_summary}"
-
-                results_summary += "\n"
-
-            # 가장 최근 금액 강조
-            if latest_amount:
-                results_summary += f"\n⚠️ **계산에 사용할 금액: ${latest_amount:,.0f}**\n"
-                results_summary += "이 금액을 기준으로 수수료, 나눗셈 등 계산을 수행하세요!\n"
+        # 이전 결과 요약 생성 (실제 금액 데이터 + SQL 로직 포함)
+        results_summary = self._build_results_summary(previous_results)
 
         # conversation_context에 JSON {..}이 있을 수 있으므로 escape (안전성 확보)
         safe_conversation_context = escape_template_braces(conversation_context) if conversation_context else ""
@@ -535,6 +556,7 @@ class QueryPlannerService:
 - "수수료 X% 적용", "VAT 계산", "X로 나누면", "평균 계산"
 - 단순 설명 요청 ("이게 뭐야?", "설명해줘")
 - **이미 집계 결과가 있고** 그에 대한 추가 계산 요청
+- 이전 쿼리의 **SQL 로직/계산 방식에 대한 설명 요청** ("계산식 기준이 뭐야?", "어떻게 집계했어?", "어떤 기준으로 합산했어?")
 
 **예시:**
 | 상황 | 질문 | 분류 |
@@ -682,13 +704,15 @@ intent가 "direct_answer"이면 **반드시** direct_answer_text에 계산된 �
 | Payment 데이터 있음 | "합계 계산해줘" | aggregate_local | 합계 집계 요청 |
 | 조회 완료 후 | "이중에서 총합" | aggregate_local | 참조 + 총합 집계 |
 
-### direct_answer 예시 (4개)
+### direct_answer 예시 (6개)
 | 이전 컨텍스트 | 사용자 입력 | intent | reasoning |
 |--------------|------------|--------|-----------|
 | 집계 결과 $5,000,000 | "수수료 0.6% 적용해줘" | direct_answer | 집계 결과에 백분율 계산 |
 | 합계 $1,949,000 | "5로 나누면?" | direct_answer | 집계 결과에 산술 연산 |
 | 총액 $3,000,000 | "VAT 10% 포함하면?" | direct_answer | 집계 결과에 세금 계산 |
 | 평균 $150,000 | "이게 무슨 의미야?" | direct_answer | 설명 요청 |
+| SQL: AVG(payment_count) FROM settlements | "계산식 기준이 뭐야?" | direct_answer | 이전 SQL 집계 로직 설명 |
+| SQL: SUM(amount) GROUP BY merchant_id | "어떤 기준으로 합산했어?" | direct_answer | SQL 로직 설명 |
 
 ### query_needed 예시 (7개)
 | 이전 컨텍스트 | 사용자 입력 | intent | reasoning |

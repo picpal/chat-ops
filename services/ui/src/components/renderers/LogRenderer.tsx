@@ -214,6 +214,7 @@ const LogRenderer: React.FC<LogRendererProps> = ({ spec, data }) => {
                 <button
                   onClick={() => handleCopyLine(log)}
                   className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-slate-300 transition-opacity"
+                  data-pdf-hide
                 >
                   <Icon name="content_copy" size="sm" />
                 </button>

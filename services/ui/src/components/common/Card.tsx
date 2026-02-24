@@ -29,7 +29,7 @@ const Card: React.FC<CardProps> = ({
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50/50">
           <div className="flex items-center gap-3">
             {icon && (
-              <div className="p-1.5 rounded bg-white text-slate-500 border border-slate-200 shadow-sm">
+              <div className="p-1.5 rounded bg-white text-slate-500 border border-slate-200 shadow-sm" data-pdf-hide>
                 <span className="material-symbols-outlined text-[20px]">{icon}</span>
               </div>
             )}
@@ -40,7 +40,7 @@ const Card: React.FC<CardProps> = ({
               </div>
             )}
           </div>
-          {actions && <div className="flex gap-2">{actions}</div>}
+          {actions && <div className="flex gap-2" data-pdf-hide>{actions}</div>}
         </div>
       )}
       <div className="p-6">{children}</div>

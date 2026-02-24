@@ -32,6 +32,55 @@ def to_camel(string: str) -> str:
     return components[0] + ''.join(x.title() for x in components[1:])
 
 
+def _summarize_sql(sql: str) -> str:
+    """SQL에서 핵심 요약 추출 (집계 함수, 테이블, GROUP BY, WHERE 요약)
+
+    Args:
+        sql: SQL 문자열
+
+    Returns:
+        요약 문자열 (예: "집계: AVG(payment_count) | FROM settlements | GROUP BY merchant_id | WHERE ...")
+        None 또는 빈 문자열 입력 시 빈 문자열 반환
+    """
+    if not sql:
+        return ""
+
+    parts = []
+
+    # 1. 집계 함수 추출 (SUM, AVG, COUNT, MAX, MIN)
+    agg_exprs = re.findall(
+        r'(\b(?:SUM|AVG|COUNT|MAX|MIN)\s*\([^)]*\))', sql, re.IGNORECASE
+    )
+    if agg_exprs:
+        parts.append("집계: " + ", ".join(agg_exprs[:3]))
+
+    # 2. FROM 테이블 추출
+    from_match = re.search(r'\bFROM\s+(\w+)', sql, re.IGNORECASE)
+    if from_match:
+        parts.append("FROM " + from_match.group(1))
+
+    # 3. GROUP BY 추출
+    group_match = re.search(
+        r'\bGROUP\s+BY\s+(.+?)(?=\s*(?:HAVING|ORDER|LIMIT|$))',
+        sql, re.IGNORECASE,
+    )
+    if group_match:
+        parts.append("GROUP BY " + group_match.group(1).strip()[:50])
+
+    # 4. WHERE 조건 요약 (너무 길면 잘라냄)
+    where_match = re.search(
+        r'\bWHERE\s+(.+?)(?=\s*(?:GROUP|ORDER|LIMIT|$))',
+        sql, re.IGNORECASE | re.DOTALL,
+    )
+    if where_match:
+        where_clause = where_match.group(1).strip()
+        if len(where_clause) > 80:
+            where_clause = where_clause[:80] + "..."
+        parts.append("WHERE " + where_clause)
+
+    return " | ".join(parts) if parts else ""
+
+
 # ============================================
 # 참조 표현 감지
 # ============================================
@@ -312,8 +361,23 @@ def build_conversation_context(history: List["ChatMessageItem"]) -> str:
             if msg.queryPlan:
                 plan_summary = summarize_query_plan(msg.queryPlan)
                 context += f"**어시스턴트**: [쿼리: {plan_summary}]\n"
+
+                # SQL 요약 포함 (text_to_sql 모드에서 실행된 SQL이 있는 경우)
+                sql = msg.queryPlan.get("sql")
+                if sql:
+                    sql_summary = _summarize_sql(sql)
+                    if sql_summary:
+                        context += f"  -> **실행된 SQL 요약**: {sql_summary}\n"
             else:
                 context += f"**어시스턴트**: [결과 표시됨]\n"
+
+            # table 타입 renderSpec에서 컬럼 정보 포함
+            if msg.renderSpec and msg.renderSpec.get("type") == "table":
+                columns = msg.renderSpec.get("columns", [])
+                if columns:
+                    col_keys = [c.get("key", "") for c in columns if c.get("key")]
+                    if col_keys:
+                        context += f"  -> **결과 컬럼**: {', '.join(col_keys)}\n"
 
             # 집계 결과값 포함 (중요: 후속 계산용)
             if msg.renderSpec and msg.renderSpec.get("type") == "text":
@@ -378,6 +442,7 @@ def extract_previous_results(history: List["ChatMessageItem"]) -> List[Dict[str,
                 "total_amount": None,  # 금액 합계 (있는 경우)
                 "groupByColumns": None,  # GROUP BY 컬럼들
                 "groupByValues": None,   # GROUP BY 결과 값들
+                "sql_summary": None,  # 실행된 SQL 요약
             }
 
             # QueryResult가 있으면 조회 결과
@@ -386,6 +451,11 @@ def extract_previous_results(history: List["ChatMessageItem"]) -> List[Dict[str,
                 result_info["count"] = msg.queryResult.get("totalCount", 0)
                 if msg.queryPlan:
                     result_info["entity"] = msg.queryPlan.get("entity", "unknown")
+
+                    # SQL 요약 추출 (text_to_sql 모드에서 실행된 SQL이 있는 경우)
+                    sql = msg.queryPlan.get("sql")
+                    if sql:
+                        result_info["sql_summary"] = _summarize_sql(sql)
 
                 # 집계 쿼리 메타데이터 추출 (GROUP BY 정보) - TC-014 지원
                 is_aggregation = msg.queryResult.get("isAggregation", False)
