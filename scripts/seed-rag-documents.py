@@ -1464,9 +1464,59 @@ WHERE card_installment_months >= 6
 | 월별 평균 거래 건수 | payments | CTE: 월별 COUNT(*), 외부: AVG() |
 | 일별 거래 건수 추이 | payments | COUNT(*) GROUP BY DATE(created_at) |
 | 정산 레코드당 건수 | settlements | payment_count 컬럼 직접 사용 |
+| 가맹점별 환불율 | payments LEFT JOIN refunds | COUNT(*) FILTER (WHERE r.refund_key IS NOT NULL) / COUNT(*) |
 
 **주의**: settlements.payment_count는 "정산 레코드당 건수"이므로 AVG(payment_count)는 "정산당 평균 건수"입니다.
 "월 평균 거래 건수"를 구하려면 payments에서 월별 COUNT 후 AVG를 사용하세요.""",
+        "status": "active",
+        "submitted_by": "system"
+    },
+    {
+        "doc_type": "faq",
+        "title": "환불율 계산 방법",
+        "content": """## Q: 환불율은 어떻게 조회하나요?
+
+### A: 환불율 계산 방법
+
+#### 1. 환불율 정의
+
+환불율 = (환불 건수 / 총 결제 건수) × 100
+
+#### 2. 올바른 계산 방법
+
+**반드시 payments 테이블 기준으로 refunds를 LEFT JOIN하여 계산합니다.**
+
+```sql
+SELECT p.merchant_id,
+       COUNT(*) AS total_payments,
+       COUNT(*) FILTER (WHERE r.refund_key IS NOT NULL) AS refund_count,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE r.refund_key IS NOT NULL) /
+             NULLIF(COUNT(*), 0), 2) AS refund_rate
+FROM payments p
+LEFT JOIN refunds r ON p.payment_key = r.payment_key
+WHERE p.created_at >= NOW() - INTERVAL '1 month'
+  AND p.status = 'DONE'
+GROUP BY p.merchant_id
+```
+
+#### 3. 주의사항
+
+- **settlements.payment_count 사용 금지**: 정산 레코드 단위 건수이므로 환불율 계산에 부적합
+- **LEFT JOIN 필수**: 환불이 없는 결제도 포함해야 정확한 비율 계산 가능
+- **NULLIF(COUNT(*), 0)**: 0으로 나누기 방지
+
+#### 4. 조회 질문 예시
+
+- "이 가맹점의 환불율"
+- "최근 1개월 환불 비율"
+- "가맹점별 환불율 순위"
+- "환불율이 5% 이상인 가맹점"
+
+#### 5. 금액 기준 환불율
+
+건수 대신 금액 기준으로 계산할 수도 있습니다:
+- 금액 환불율 = (총 환불 금액 / 총 결제 금액) × 100
+- 금액 기준 시 status IN ('DONE', 'CANCELED', 'PARTIAL_CANCELED') 사용""",
         "status": "active",
         "submitted_by": "system"
     }

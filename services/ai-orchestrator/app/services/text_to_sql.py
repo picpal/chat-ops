@@ -706,6 +706,7 @@ SCHEMA_PROMPT = """
 | "거래 금액", "매출", "결제 금액 합계" | **payments** (SUM(amount)) | 개별 결제 금액 기반 |
 | "정산 현황", "정산 금액", "지급 상태" | **settlements** | 정산 프로세스 데이터 |
 | "환불 건수", "환불 금액" | **refunds** | 환불 트랜잭션 데이터 |
+| "환불율", "환불 비율" | **payments LEFT JOIN refunds** | 결제 대비 환불 비율 계산 (패턴 5 참조) |
 
 ⚠️ **settlements.payment_count vs payments COUNT(*)**:
 - settlements.payment_count: 하나의 정산 레코드에 포함된 결제 건수 (일별 정산 단위)
@@ -1043,6 +1044,59 @@ ORDER BY avg_monthly_count DESC;
 
 ⚠️ settlements.payment_count의 AVG를 사용하지 마세요! 의미가 다릅니다.
 
+### 패턴 5: 환불율 / 교차 테이블 비율 계산 (Cross-Table Rate)
+**인식 키워드**: "환불율", "환불 비율", "환불 현황 + 환불율"
+
+**핵심 규칙**:
+- 환불율 = 환불 건수 / 총 결제 건수 × 100
+- 반드시 payments 테이블을 기준(FROM)으로 refunds를 LEFT JOIN
+- settlements.payment_count 사용 금지! (정산 레코드당 건수이므로 의미가 다름)
+
+**건수 기준 환불율** (기본):
+```sql
+SELECT p.merchant_id,
+       COUNT(*) AS total_payments,
+       COUNT(*) FILTER (WHERE r.refund_key IS NOT NULL) AS refund_count,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE r.refund_key IS NOT NULL) /
+             NULLIF(COUNT(*), 0), 2) AS refund_rate
+FROM payments p
+LEFT JOIN refunds r ON p.payment_key = r.payment_key
+WHERE p.created_at >= NOW() - INTERVAL '1 month'
+  AND p.status = 'DONE'
+GROUP BY p.merchant_id
+ORDER BY refund_rate DESC;
+```
+
+**특정 가맹점 환불율**:
+```sql
+SELECT
+    COUNT(*) AS total_payments,
+    COUNT(*) FILTER (WHERE r.refund_key IS NOT NULL) AS refund_count,
+    ROUND(100.0 * COUNT(*) FILTER (WHERE r.refund_key IS NOT NULL) /
+          NULLIF(COUNT(*), 0), 2) AS refund_rate
+FROM payments p
+LEFT JOIN refunds r ON p.payment_key = r.payment_key
+WHERE p.merchant_id = 'mer_xxx'
+  AND p.created_at >= NOW() - INTERVAL '1 month'
+  AND p.status = 'DONE';
+```
+
+**금액 기준 환불율** (건수 대신 금액):
+```sql
+SELECT p.merchant_id,
+       SUM(p.amount) AS total_payment_amount,
+       COALESCE(SUM(r.amount), 0) AS total_refund_amount,
+       ROUND(100.0 * COALESCE(SUM(r.amount), 0) /
+             NULLIF(SUM(p.amount), 0), 2) AS refund_rate_by_amount
+FROM payments p
+LEFT JOIN refunds r ON p.payment_key = r.payment_key
+WHERE p.created_at >= NOW() - INTERVAL '1 month'
+  AND p.status IN ('DONE', 'CANCELED', 'PARTIAL_CANCELED')
+GROUP BY p.merchant_id;
+```
+
+⚠️ 취소율은 refunds 테이블 불필요: 취소율은 payments.status IN ('CANCELED', 'PARTIAL_CANCELED')로 직접 계산 가능.
+
 ### 패턴 인식 규칙 요약
 | 키워드 조합 | 사용할 패턴 |
 |------------|-----------|
@@ -1051,6 +1105,7 @@ ORDER BY avg_monthly_count DESC;
 | "성공/실패 동시 집계" | 패턴 2 (FILTER) |
 | "비율/점유율" | 패턴 3 (윈도우 함수) |
 | "월별 평균 건수", "N개월 평균" | 패턴 4 (2단계 CTE 집계) |
+| "환불율/환불 비율" | 패턴 5 (LEFT JOIN + FILTER) |
 """)
 
         # 스키마 정보

@@ -902,23 +902,71 @@ def _find_daily_check_context(conversation_history: List[ChatMessageItem]) -> Op
     대화 이력에서 일일점검 컨텍스트 찾기
 
     Returns:
-        daily_check_result 컨텍스트 또는 None
+        daily_check_result 컨텍스트 또는 None.
+        반환 dict 키: targetDate, metrics, availableFilters
     """
     for msg in reversed(conversation_history):
         if msg.role == "assistant" and msg.queryResult:
-            context = msg.queryResult.get("context_for_followup") or msg.queryResult.get("metadata", {})
+            context_for_followup = msg.queryResult.get("context_for_followup", {})
+            context = context_for_followup or msg.queryResult.get("metadata", {})
             if context.get("type") == "daily_check_result" or context.get("dataSource") == "daily_check_template":
                 return {
                     "targetDate": context.get("targetDate") or msg.queryResult.get("metadata", {}).get("targetDate"),
-                    "metrics": context.get("metrics", {})
+                    "metrics": context.get("metrics", {}),
+                    "availableFilters": context.get("availableFilters", [])
                 }
             # queryPlan에서 daily_check_template 확인
             if msg.queryPlan and msg.queryPlan.get("mode") == "daily_check_template":
                 return {
                     "targetDate": msg.queryPlan.get("targetDate"),
-                    "metrics": {}
+                    "metrics": context_for_followup.get("metrics", {}),
+                    "availableFilters": context_for_followup.get("availableFilters", [])
                 }
     return None
+
+
+def _format_daily_check_metrics(metrics: Dict[str, Any]) -> str:
+    """
+    일일점검 metrics를 LLM이 이해할 수 있는 텍스트로 포맷팅
+
+    Args:
+        metrics: 일일점검 metrics dict.
+                 예: {"todayCount": 150, "todayAmount": 15000000,
+                      "statusDistribution": [...], "refundCount": 10, "errorCount": 5}
+
+    Returns:
+        포맷팅된 문자열. metrics가 빈 dict이면 빈 문자열 반환.
+    """
+    if not metrics:
+        return ""
+
+    lines = ["[일일점검 컨텍스트]"]
+
+    today_count = metrics.get("todayCount")
+    today_amount = metrics.get("todayAmount")
+    if today_count is not None or today_amount is not None:
+        parts = []
+        if today_count is not None:
+            parts.append(f"{today_count}건")
+        if today_amount is not None:
+            parts.append(f"금액: {today_amount:,.0f}원")
+        lines.append(f"- 오늘 거래: {', '.join(parts)}")
+
+    refund_count = metrics.get("refundCount")
+    if refund_count is not None:
+        lines.append(f"- 환불: {refund_count}건")
+
+    error_count = metrics.get("errorCount")
+    if error_count is not None:
+        lines.append(f"- 오류/실패: {error_count}건")
+
+    status_distribution = metrics.get("statusDistribution")
+    if isinstance(status_distribution, list) and status_distribution:
+        status_parts = [f"{item.get('status')} {item.get('count')}건" for item in status_distribution if item.get("status") is not None]
+        if status_parts:
+            lines.append(f"- 상태별: {', '.join(status_parts)}")
+
+    return "\n".join(lines)
 
 
 def _is_error_related_query(message: str) -> bool:
@@ -1274,8 +1322,9 @@ async def handle_text_to_sql(
     AI가 직접 SQL을 생성하고 읽기 전용 DB에서 실행합니다.
 
     Phase 0 추가: 일일점검 꼬리 질문 처리
-    - 일일점검 컨텍스트가 있고 오류/실패 관련 질문인 경우
-    - targetDate를 메시지에 자동 주입
+    - 일일점검 컨텍스트가 있으면 모든 꼬리 질문에서 targetDate 자동 주입
+    - metrics가 있으면 LLM 컨텍스트에 추가
+    - Phase 1.5 clarification을 우회하여 불필요한 기간 재질문 방지
 
     Phase 1 추가: 산술 연산 요청 감지
     - 이전 집계 결과가 있고 + 산술 연산 요청인 경우
@@ -1285,21 +1334,35 @@ async def handle_text_to_sql(
 
     # 메시지 변환용 (일일점검 꼬리 질문 처리 결과)
     enhanced_message = request.message
+    # 일일점검 꼬리 질문 여부 플래그 (Phase 1.5 clarification 우회용)
+    is_daily_check_followup = False
 
     try:
         # ========================================
         # Phase 0: 일일점검 꼬리 질문 처리
+        # - 오류 관련뿐 아니라 모든 꼬리 질문에서 targetDate 주입
+        # - metrics가 있으면 LLM 컨텍스트에 추가
         # ========================================
         if request.conversation_history:
             daily_check_context = _find_daily_check_context(request.conversation_history)
             if daily_check_context:
                 target_date = daily_check_context.get("targetDate")
-                if target_date and _is_error_related_query(request.message):
+                if target_date:
+                    is_daily_check_followup = True
                     # 메시지에 날짜가 없으면 자동 주입
                     if not _has_date_in_message(request.message):
                         enhanced_message = f"{target_date} 날짜 기준으로 {request.message}"
                         logger.info(f"[{request_id}] Daily check followup: injected targetDate={target_date}")
-                        logger.info(f"[{request_id}] Enhanced message: {enhanced_message}")
+
+                    # metrics가 있으면 LLM이 컨텍스트를 이해하도록 추가
+                    metrics = daily_check_context.get("metrics", {})
+                    if metrics:
+                        metrics_context = _format_daily_check_metrics(metrics)
+                        if metrics_context:
+                            enhanced_message = f"{enhanced_message}\n\n{metrics_context}"
+                            logger.info(f"[{request_id}] Daily check followup: appended metrics context")
+
+                    logger.info(f"[{request_id}] Enhanced message: {enhanced_message}")
 
         # ========================================
         # Phase 1: 산술 연산 요청 감지 (수수료, VAT 등)
@@ -1333,16 +1396,19 @@ async def handle_text_to_sql(
 
         # ========================================
         # Phase 1.5: 집계 요청 + 기간 없음 clarification
+        # Phase 1.5 clarification은 daily check 꼬리 질문 시 우회됨 (날짜가 이미 주입되어 있으므로)
         # ========================================
         # 참조 표현 먼저 감지 (새 대화인지 확인용)
         is_refinement, ref_type = detect_reference_expression(request.message)
 
-        # 집계 요청인데 기간이 없으면 clarification 반환
-        clarification_response = _check_aggregate_without_timerange_for_text_to_sql(
-            enhanced_message, is_refinement, request_id
-        )
-        if clarification_response:
-            return clarification_response
+        # 일일점검 꼬리 질문이 아닌 경우에만 clarification 체크
+        if not is_daily_check_followup:
+            # 집계 요청인데 기간이 없으면 clarification 반환
+            clarification_response = _check_aggregate_without_timerange_for_text_to_sql(
+                enhanced_message, is_refinement, request_id
+            )
+            if clarification_response:
+                return clarification_response
 
         text_to_sql = get_text_to_sql_service()
 
@@ -1493,9 +1559,13 @@ def build_sql_history(conversation_history: Optional[List[ChatMessageItem]]) -> 
     대화 기반 맥락 처리를 위해 다음 정보를 포함:
     - role: 메시지 역할 (user/assistant)
     - content: 메시지 내용
-    - sql: 생성된 SQL (assistant 메시지)
+    - sql: 생성된 SQL (assistant 메시지, text_to_sql 모드)
     - rowCount: 쿼리 결과 건수 (assistant 메시지)
     - whereConditions: WHERE 조건 목록 (assistant 메시지) - Phase 1: 명시적 저장
+    - dailyCheckContext: 일일점검 컨텍스트 (daily_check_template 모드)
+      - targetDate: 점검 대상 날짜
+      - metrics: 일일점검 지표 요약
+      - availableFilters: 사용 가능한 필터 목록
     """
     if not conversation_history:
         return []
@@ -1520,17 +1590,52 @@ def build_sql_history(conversation_history: Optional[List[ChatMessageItem]]) -> 
                     if where_conditions:
                         entry["whereConditions"] = where_conditions
 
+            elif msg.queryPlan.get("mode") == "daily_check_template":
+                # 일일점검 결과를 컨텍스트로 포함 (꼬리 질문 시 LLM이 참조)
+                context_for_followup = {}
+                if msg.queryResult:
+                    context_for_followup = msg.queryResult.get("context_for_followup", {})
+
+                target_date = (
+                    msg.queryPlan.get("targetDate") or
+                    context_for_followup.get("targetDate")
+                )
+                metrics = context_for_followup.get("metrics", {})
+
+                # dailyCheckContext에 핵심 정보 포함
+                daily_check_ctx: Dict[str, Any] = {}
+                if target_date:
+                    daily_check_ctx["targetDate"] = target_date
+                if metrics:
+                    daily_check_ctx["metrics"] = metrics
+                available_filters = context_for_followup.get("availableFilters", [])
+                if available_filters:
+                    daily_check_ctx["availableFilters"] = available_filters
+
+                if daily_check_ctx:
+                    entry["dailyCheckContext"] = daily_check_ctx
+
+                # content에 일일점검 자연어 요약 포함
+                metrics_summary = _format_daily_check_metrics(metrics)
+                if metrics_summary:
+                    entry["content"] = f"일일점검 결과 ({target_date}): {metrics_summary}"
+
         # 결과 건수 추출 (queryResult의 metadata에서)
         if msg.role == "assistant" and msg.queryResult:
             metadata = msg.queryResult.get("metadata", {})
-            # totalRows 또는 rowsReturned 우선순위로 확인
-            row_count = (
-                msg.queryResult.get("totalCount") or
-                metadata.get("totalRows") or
-                metadata.get("rowsReturned")
-            )
-            if row_count is not None:
-                entry["rowCount"] = row_count
+
+            # daily_check_template의 경우 queryCount 사용
+            if msg.queryPlan and msg.queryPlan.get("mode") == "daily_check_template":
+                entry["rowCount"] = metadata.get("queryCount", 0)
+            else:
+                # totalRows 또는 rowsReturned 우선순위로 확인
+                row_count = (
+                    msg.queryResult.get("totalCount") or
+                    metadata.get("totalRows") or
+                    metadata.get("rowsReturned")
+                )
+                if row_count is not None:
+                    entry["rowCount"] = row_count
 
         sql_history.append(entry)
 

@@ -506,5 +506,105 @@ class TestEdgeCases:
         assert "NULLIF" in upper_sql
 
 
+class TestRefundRatePatterns:
+    """환불율(Refund Rate) 패턴 테스트"""
+
+    def test_refund_rate_pattern_uses_left_join(self):
+        """환불율 SQL이 payments 기준으로 refunds를 LEFT JOIN하는지 검증
+
+        올바른 환불율 계산은 payments가 기준 테이블(FROM)이어야 하고,
+        refunds는 LEFT JOIN으로 연결되어야 함 (환불이 없는 결제도 포함).
+        """
+        refund_rate_sql = """
+        SELECT p.merchant_id,
+               COUNT(*) AS total_payments,
+               COUNT(*) FILTER (WHERE r.refund_key IS NOT NULL) AS refund_count,
+               ROUND(100.0 * COUNT(*) FILTER (WHERE r.refund_key IS NOT NULL) /
+                     NULLIF(COUNT(*), 0), 2) AS refund_rate
+        FROM payments p
+        LEFT JOIN refunds r ON p.payment_key = r.payment_key
+        WHERE p.created_at >= NOW() - INTERVAL '1 month'
+          AND p.status = 'DONE'
+        GROUP BY p.merchant_id
+        ORDER BY refund_rate DESC;
+        """
+
+        upper_sql = refund_rate_sql.upper()
+
+        # payments가 FROM의 기준 테이블이어야 함
+        assert "FROM PAYMENTS" in upper_sql, "payments 테이블이 FROM 절의 기준 테이블이어야 함"
+
+        # refunds는 LEFT JOIN으로 연결되어야 함
+        assert "LEFT JOIN REFUNDS" in upper_sql or "LEFT JOIN REFUNDS" in upper_sql.replace("\n", " "), \
+            "refunds는 LEFT JOIN으로 연결되어야 함"
+
+    def test_refund_rate_pattern_does_not_use_settlements(self):
+        """환불율 SQL이 settlements.payment_count를 사용하지 않는지 검증
+
+        환불율은 payments 테이블의 실제 결제건을 기준으로 계산해야 하며,
+        settlements.payment_count를 분모로 사용하면 안 됨.
+        """
+        refund_rate_sql = """
+        SELECT p.merchant_id,
+               COUNT(*) AS total_payments,
+               COUNT(*) FILTER (WHERE r.refund_key IS NOT NULL) AS refund_count,
+               ROUND(100.0 * COUNT(*) FILTER (WHERE r.refund_key IS NOT NULL) /
+                     NULLIF(COUNT(*), 0), 2) AS refund_rate
+        FROM payments p
+        LEFT JOIN refunds r ON p.payment_key = r.payment_key
+        WHERE p.created_at >= NOW() - INTERVAL '1 month'
+          AND p.status = 'DONE'
+        GROUP BY p.merchant_id
+        ORDER BY refund_rate DESC;
+        """
+
+        upper_sql = refund_rate_sql.upper()
+
+        # settlements.payment_count를 사용하면 안 됨
+        assert "SETTLEMENTS.PAYMENT_COUNT" not in upper_sql, \
+            "환불율 계산 시 settlements.payment_count를 사용하면 안 됨"
+
+    def test_refund_rate_pattern_has_group_by(self):
+        """환불율 SQL에 GROUP BY가 포함되는지 검증
+
+        가맹점별 환불율을 계산하려면 GROUP BY가 필수임.
+        """
+        refund_rate_sql = """
+        SELECT p.merchant_id,
+               COUNT(*) AS total_payments,
+               COUNT(*) FILTER (WHERE r.refund_key IS NOT NULL) AS refund_count,
+               ROUND(100.0 * COUNT(*) FILTER (WHERE r.refund_key IS NOT NULL) /
+                     NULLIF(COUNT(*), 0), 2) AS refund_rate
+        FROM payments p
+        LEFT JOIN refunds r ON p.payment_key = r.payment_key
+        WHERE p.created_at >= NOW() - INTERVAL '1 month'
+          AND p.status = 'DONE'
+        GROUP BY p.merchant_id
+        ORDER BY refund_rate DESC;
+        """
+
+        upper_sql = refund_rate_sql.upper()
+
+        # GROUP BY가 포함되어야 함
+        assert "GROUP BY" in upper_sql, "환불율 집계에는 GROUP BY가 필수임"
+
+    def test_refund_rate_prompt_included(self):
+        """_build_prompt() 출력에 패턴 5와 환불율 관련 텍스트가 포함되는지 검증
+
+        TDD RED: 현재 프롬프트에 패턴 5가 정의되어 있지 않으므로 이 테스트는 실패해야 함.
+        이 테스트가 통과하려면 text_to_sql.py의 _build_prompt()에
+        패턴 5 (환불율 패턴) 가이드라인을 추가해야 함.
+        """
+        from app.services.text_to_sql import TextToSqlService
+
+        service = TextToSqlService()
+        prompt = service._build_prompt(question="가맹점별 환불율을 알려줘")
+
+        assert "패턴 5" in prompt, \
+            "_build_prompt()에 '패턴 5' 텍스트가 없음. 환불율 패턴 가이드를 추가해야 함"
+        assert "환불율" in prompt, \
+            "_build_prompt()에 '환불율' 텍스트가 없음. 환불율 패턴 가이드를 추가해야 함"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

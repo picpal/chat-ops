@@ -251,6 +251,20 @@ def build_conversation_context(history: List["ChatMessageItem"]) -> str:
             total_amount = None
             data_obj = msg.queryResult.get("data", {})
             rows = data_obj.get("rows", []) if isinstance(data_obj, dict) else []
+
+            # composite 결과 (rows가 비어있고 context_for_followup이 있는 경우)
+            context_for_followup = msg.queryResult.get("context_for_followup")
+            if not rows and context_for_followup:
+                entity = "DailyCheck"
+                metrics = context_for_followup.get("metrics", {})
+                count = metrics.get("todayCount", 0)
+                today_amount = metrics.get("todayAmount")
+                if today_amount is not None:
+                    try:
+                        total_amount = float(today_amount)
+                    except (ValueError, TypeError):
+                        total_amount = None
+
             if rows:
                 amounts = []
                 for row in rows:
@@ -485,6 +499,22 @@ def extract_previous_results(history: List["ChatMessageItem"]) -> List[Dict[str,
                 rows = data_obj.get("rows", []) if isinstance(data_obj, dict) else []
                 logger.info(f"[extract_previous_results] msg #{i} rows length: {len(rows) if rows else 0}")
 
+                # composite 결과 (rows가 비어있고 context_for_followup이 있는 경우)
+                context_for_followup = msg.queryResult.get("context_for_followup")
+                if not rows and context_for_followup:
+                    result_info["entity"] = "DailyCheck"
+                    result_info["context_for_followup"] = context_for_followup
+                    metrics = context_for_followup.get("metrics", {})
+                    result_info["count"] = metrics.get("todayCount", 0)
+                    today_amount = metrics.get("todayAmount")
+                    if today_amount is not None:
+                        try:
+                            result_info["total_amount"] = float(today_amount)
+                            result_info["data_summary"] = f"오늘 결제 금액: ${result_info['total_amount']:,.0f} ({result_info['count']}건)"
+                        except (ValueError, TypeError):
+                            pass
+                    logger.info(f"[extract_previous_results] msg #{i} parsed context_for_followup: entity=DailyCheck, count={result_info['count']}, total_amount={result_info['total_amount']}")
+
                 if rows:
                     # amount 필드가 있으면 합계 계산
                     amounts = []
@@ -554,8 +584,8 @@ def extract_previous_results(history: List["ChatMessageItem"]) -> List[Dict[str,
                                 except ValueError:
                                     pass
 
-            # 조회 결과나 집계 결과가 있으면 추가
-            if result_info["count"] > 0 or result_info["aggregation"]:
+            # 조회 결과나 집계 결과가 있으면 추가 (context_for_followup 있으면 count 0이어도 추가)
+            if result_info["count"] > 0 or result_info["aggregation"] or result_info.get("context_for_followup"):
                 results.append(result_info)
                 group_info = f", groupBy={result_info.get('groupByColumns')}" if result_info.get('groupByColumns') else ""
                 logger.info(f"[extract_previous_results] Added result #{len(results)}: entity={result_info['entity']}, count={result_info['count']}, total_amount={result_info['total_amount']}{group_info}")
