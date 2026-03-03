@@ -18,7 +18,7 @@ UI (React:3000) → AI Orchestrator (Python/FastAPI:8000) → Core API (Java/Spr
 
 | Layer | Tech | Role |
 |-------|------|------|
-| UI | React | RenderSpec renderer, pagination UI |
+| UI | React | RenderSpec renderer, pagination UI, PDF export |
 | AI | Python/FastAPI | NL→QueryPlan, RAG(pgvector), RenderSpec 생성 |
 | Core API | Java 21/Spring Boot/Gradle | Auth/RBAC, QueryPlan validation, SQL Builder, DB execution |
 | DB | PostgreSQL (+pgvector) | Business data + vector store |
@@ -78,6 +78,14 @@ Merchant (가맹점)
 - 설정: `quality_answer_rag.enabled`(true), `quality_answer_rag.minRating`(4)
 - API: `GET /api/v1/settings/quality-answer-rag/status`, `PUT /api/v1/settings/quality-answer-rag`
 - UI: `/scenarios` 페이지 헤더 토글
+
+## Log Analysis Settings
+
+서버 로그 파일을 업로드하여 분석하는 기능.
+
+- 설정: `log_analysis.enabled`(true), `log_analysis.maskSensitiveData`(true)
+- API: `GET /api/v1/settings/log-analysis/status`, `PUT /api/v1/settings/log-analysis`, 경로 CRUD
+- UI: `/settings/log-analysis` 페이지
 
 ## Troubleshooting
 

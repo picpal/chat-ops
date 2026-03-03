@@ -93,6 +93,7 @@ curl -X POST http://localhost:8080/api/v1/query/start \
 | V15 | pgvector 확장 |
 | V16-V21 | RAG 문서, 별점 테이블 |
 | V22 | settings 테이블 (Quality Answer RAG) |
+| V23 | log_analysis_settings (로그 분석 설정) |
 
 ### 마이그레이션 실행
 

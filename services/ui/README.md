@@ -11,6 +11,7 @@
 - **TanStack Query** 데이터 페칭
 - **Recharts** 데이터 시각화
 - **React Markdown** 마크다운 렌더링
+- **html2canvas + jsPDF** PDF 내보내기
 
 ## 실행 방법
 
@@ -55,14 +56,18 @@ npm run dev
 - ✅ 시나리오 관리 대시보드
 - ✅ Quality Answer RAG 토글
 - ✅ 마크다운 테이블 렌더링
+- ✅ 로그 분석 설정 페이지
+- ✅ PDF 내보내기 및 클립보드 복사
+- ✅ 사이드바 아이콘 레일 네비게이션
 
 ### 페이지 구성
 
 | 경로 | 컴포넌트 | 설명 |
 |------|----------|------|
-| `/` | `ChatPage` | 채팅 인터페이스 |
+| `/` | `ChatInterface` | 채팅 인터페이스 |
+| `/admin` | `AdminPage` | RAG 문서 관리 |
 | `/scenarios` | `ScenariosPage` | 시나리오 관리 대시보드 |
-| `/documents` | `DocumentsPage` | RAG 문서 관리 |
+| `/settings/log-analysis` | `LogSettingsPage` | 로그 분석 설정 |
 
 ## 프로젝트 구조
 
@@ -71,6 +76,7 @@ src/
 ├── api/              # API 클라이언트
 │   ├── chat.ts
 │   ├── documents.ts
+│   ├── logSettings.ts
 │   ├── ratings.ts
 │   └── settings.ts
 ├── components/
@@ -84,11 +90,18 @@ src/
 │   ├── renderers/    # RenderSpec 렌더러
 │   │   ├── TableRenderer.tsx
 │   │   ├── ChartRenderer.tsx
-│   │   └── TextRenderer.tsx
-│   └── scenarios/    # 시나리오 관리
-│       ├── ScenariosPage.tsx
-│       ├── QualityAnswerToggle.tsx
-│       └── RatingSummaryCards.tsx
+│   │   ├── TextRenderer.tsx
+│   │   ├── LogRenderer.tsx
+│   │   ├── LogAnalysisRenderer.tsx
+│   │   ├── CompositeRenderer.tsx
+│   │   ├── ClarificationRenderer.tsx
+│   │   └── DownloadRenderer.tsx
+│   ├── scenarios/    # 시나리오 관리
+│   │   ├── ScenariosPage.tsx
+│   │   ├── QualityAnswerToggle.tsx
+│   │   └── RatingSummaryCards.tsx
+│   └── settings/      # 설정 페이지
+│       └── LogSettingsPage.tsx
 ├── hooks/            # 커스텀 훅
 │   ├── useChat.ts
 │   ├── useRatings.ts
@@ -197,6 +210,10 @@ POST /api/v1/ratings
 
 // Quality Answer RAG 상태
 GET /api/v1/settings/quality-answer-rag/status
+
+// 로그 분석 설정
+GET /api/v1/settings/log-analysis/status
+PUT /api/v1/settings/log-analysis
 ```
 
 ### Core API
