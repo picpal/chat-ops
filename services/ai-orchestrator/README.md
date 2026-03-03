@@ -78,6 +78,7 @@ curl -X POST http://localhost:8000/api/v1/chat \
 - ✅ RAG 문서 검색 (pgvector)
 - ✅ 별점 평가 및 분석
 - ✅ Quality Answer RAG
+- ✅ 로그 분석 설정 관리
 
 ## API 엔드포인트
 
@@ -119,6 +120,18 @@ curl -X POST http://localhost:8000/api/v1/chat \
 | GET | `/api/v1/settings/{key}` | 일반 설정 조회 |
 | PUT | `/api/v1/settings/{key}` | 일반 설정 업데이트 |
 
+### Log Analysis Settings API
+| Method | Endpoint | 설명 |
+|--------|----------|------|
+| GET | `/api/v1/settings/log-analysis/status` | 로그 분석 상태 조회 |
+| GET | `/api/v1/settings/log-analysis` | 전체 설정 조회 |
+| PUT | `/api/v1/settings/log-analysis` | 설정 업데이트 |
+| GET | `/api/v1/settings/log-analysis/paths` | 로그 경로 목록 |
+| POST | `/api/v1/settings/log-analysis/paths` | 로그 경로 추가 |
+| PUT | `/api/v1/settings/log-analysis/paths/{id}` | 로그 경로 수정 |
+| DELETE | `/api/v1/settings/log-analysis/paths/{id}` | 로그 경로 삭제 |
+| POST | `/api/v1/settings/log-analysis/paths/{id}/test` | 로그 경로 테스트 |
+
 ## Quality Answer RAG
 
 높은 별점(4~5점) 답변을 자동 저장하고 유사 질문 시 참고하여 답변 품질 향상.
@@ -134,3 +147,5 @@ curl -X POST http://localhost:8000/api/v1/chat \
 - `app/services/settings_service.py` - 설정 CRUD
 - `app/services/quality_answer_service.py` - 고품질 답변 저장/검색
 - `app/api/v1/settings.py` - Settings REST API
+- `app/services/log_analysis_service.py` - 로그 파일 분석, 민감 데이터 마스킹
+- `app/api/v1/log_settings.py` - Log Analysis Settings REST API
